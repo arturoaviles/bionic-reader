@@ -2,7 +2,7 @@
 name = "bionic-reader"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.85.1"
 description = "Configurable bionic reading for text streams and interactive shells"
 license = "MIT"
 repository = "https://github.com/arturoaviles/bionic-reader"

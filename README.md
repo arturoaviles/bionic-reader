@@ -6,7 +6,7 @@ The project is not published yet. The repository contains local candidate-build 
 
 ## Build from source
 
-Install Rust 1.85 or newer, then build and install the executable from this checkout:
+Install Rust 1.85.1 or newer, then build and install the executable from this checkout:
 
 ```sh
 cargo install --path . --locked
@@ -83,7 +83,7 @@ The candidate build matrix targets macOS 11 or newer and Linux x86-64/ARM64 with
 
 Scripts under `scripts/` produce local candidate artifacts for Homebrew, apt, dnf, pacman, classic Snap, pip/uv wheels, and npm/Yarn/pnpm tarballs. They do not publish to registries or create publisher keys. Linux repository-generation scripts sign package/index metadata using an existing key explicitly supplied to the script; they never generate a publisher identity. The installation smokes use only a temporary key inside disposable test containers. External registry installation, repository hosting and key distribution, upgrade/uninstall validation, and Snap classic-confinement approval remain release gates.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for candidate-build commands, required tools, and checks. The implementation and local candidate tooling are available in this checkout; no public package availability is claimed.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for candidate-build commands, required tools, and checks, and [the verification record](docs/verification.md) for executed tests and remaining release gates. The implementation and local candidate tooling are available in this checkout; no public package availability is claimed.
 
 To remove a source installation, delete the installed executable (or run `cargo uninstall bionic-reader` if Cargo installed it) and remove the initialization line you added to your shell configuration. For candidate installations, use the installing manager's normal uninstall command: `brew uninstall`, `apt remove`, `dnf remove`, `pacman -R`, `snap remove`, `pip uninstall`, `uv tool uninstall`, `npm uninstall`, `yarn remove`, or `pnpm remove`, with the installed package name. Remove copied framework adapters using the instructions above; package removal never rewrites shell configuration.
 

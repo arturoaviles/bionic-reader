@@ -124,7 +124,7 @@ fn run() -> Result<i32, Failure> {
             return Ok(0);
         }
         Some(Commands::Init { shell }) => {
-            let code = session::init(shell).map_err(Failure::Usage)?;
+            let code = bionic_reader::shell::init(shell).map_err(Failure::Usage)?;
             io::stdout().lock().write_all(code.as_bytes())?;
             return Ok(0);
         }

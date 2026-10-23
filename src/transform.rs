@@ -10,7 +10,7 @@ const MAX_PENDING: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControlKind {
     Sgr,
-    OscMetadata,
+    Metadata,
     Other,
 }
 
@@ -393,104 +393,8 @@ impl Transformer {
     }
 
     fn render(&mut self, source: &[u8], tokens: &[Token]) -> Vec<u8> {
-        if tokens.is_empty() {
-            return Vec::new();
-        }
-
-        #[derive(Clone, Copy)]
-        struct Emphasis {
-            end_token: usize,
-        }
-
-        let units = graphemes(tokens);
-        let mut starts = BTreeMap::<usize, Emphasis>::new();
-        let mut cursor = 0;
-        while cursor < units.len() {
-            if units[cursor].kind != GraphemeKind::LatinLetter {
-                cursor += 1;
-                continue;
-            }
-
-            let first = cursor;
-            let mut letters = vec![cursor];
-            cursor += 1;
-            while cursor < units.len() {
-                if units[cursor].kind == GraphemeKind::LatinLetter {
-                    letters.push(cursor);
-                    cursor += 1;
-                } else if units[cursor].kind == GraphemeKind::Apostrophe
-                    && cursor + 1 < units.len()
-                    && units[cursor + 1].kind == GraphemeKind::LatinLetter
-                {
-                    cursor += 1;
-                    letters.push(cursor);
-                    cursor += 1;
-                } else {
-                    break;
-                }
-            }
-
-            if letters.len() < self.settings.min_word_length {
-                continue;
-            }
-
-            self.eligible_seen = self.eligible_seen.saturating_add(1);
-            let selected = (self.eligible_seen - 1) % self.settings.every == 0;
-            if !selected || self.settings.fraction <= 0.0 {
-                continue;
-            }
-
-            let raw_start = tokens[units[first].start_token].start;
-            let last_letter = *letters.last().expect("word has a letter");
-            let raw_end = tokens[units[last_letter].end_token - 1].end;
-            let unsafe_control = tokens[units[first].start_token..units[last_letter].end_token]
-                .iter()
-                .any(|token| matches!(token.kind, TokenKind::Control(ControlKind::Other)));
-            if raw_end.saturating_sub(raw_start) > MAX_PENDING || unsafe_control {
-                continue;
-            }
-
-            let emphasis_length = (self.settings.fraction * letters.len() as f64).ceil() as usize;
-            if emphasis_length == 0 {
-                continue;
-            }
-            let prefix_end = units[letters[emphasis_length.min(letters.len()) - 1]].end_token;
-            starts.insert(
-                units[first].start_token,
-                Emphasis {
-                    end_token: prefix_end,
-                },
-            );
-        }
-
-        let mut output = Vec::with_capacity(source.len() + tokens.len() * 8);
-        let mut emphasis_end = None;
-        let mut emphasizing = false;
-        for (index, token) in tokens.iter().enumerate() {
-            if let Some(event) = starts.get(&index).filter(|_| self.style.known) {
-                output.extend_from_slice(b"\x1b[1m");
-                emphasizing = true;
-                emphasis_end = Some(event.end_token);
-            }
-
-            output.extend_from_slice(&source[token.start..token.end]);
-            if let TokenKind::Control(ControlKind::Sgr) = token.kind {
-                let resets_intensity = sgr_resets_intensity(&source[token.start..token.end]);
-                self.style.apply_sgr(&source[token.start..token.end]);
-                if emphasizing && resets_intensity {
-                    output.extend_from_slice(b"\x1b[1m");
-                }
-            } else if matches!(token.kind, TokenKind::Control(ControlKind::Other)) {
-                self.style.known = false;
-            }
-
-            if emphasizing && emphasis_end == Some(index + 1) {
-                restore_bold_dim(&mut output, self.style);
-                emphasizing = false;
-                emphasis_end = None;
-            }
-        }
-        output
+        let starts = select_emphasis(tokens, &self.settings, &mut self.eligible_seen);
+        render_ansi(source, tokens, &starts, &mut self.style)
     }
 
     fn update_style_from_tokens(&mut self, source: &[u8], tokens: &[Token]) {
@@ -502,6 +406,107 @@ impl Transformer {
             }
         }
     }
+}
+
+// Word selection is independent of ANSI emission and style restoration.
+fn select_emphasis(
+    tokens: &[Token],
+    settings: &Settings,
+    eligible_seen: &mut usize,
+) -> BTreeMap<usize, usize> {
+    let units = graphemes(tokens);
+    let mut starts = BTreeMap::<usize, usize>::new();
+    let mut cursor = 0;
+    while cursor < units.len() {
+        if units[cursor].kind != GraphemeKind::LatinLetter {
+            cursor += 1;
+            continue;
+        }
+
+        let first = cursor;
+        let mut letters = vec![cursor];
+        cursor += 1;
+        while cursor < units.len() {
+            if units[cursor].kind == GraphemeKind::LatinLetter {
+                letters.push(cursor);
+                cursor += 1;
+            } else if units[cursor].kind == GraphemeKind::Apostrophe
+                && cursor + 1 < units.len()
+                && units[cursor + 1].kind == GraphemeKind::LatinLetter
+            {
+                cursor += 1;
+                letters.push(cursor);
+                cursor += 1;
+            } else {
+                break;
+            }
+        }
+
+        if letters.len() < settings.min_word_length {
+            continue;
+        }
+
+        *eligible_seen = eligible_seen.saturating_add(1);
+        let selected = (*eligible_seen - 1) % settings.every == 0;
+        if !selected || settings.fraction <= 0.0 {
+            continue;
+        }
+
+        let raw_start = tokens[units[first].start_token].start;
+        let last_letter = *letters.last().expect("word has a letter");
+        let raw_end = tokens[units[last_letter].end_token - 1].end;
+        let unsafe_control = tokens[units[first].start_token..units[last_letter].end_token]
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::Control(ControlKind::Other)));
+        if raw_end.saturating_sub(raw_start) > MAX_PENDING || unsafe_control {
+            continue;
+        }
+
+        let emphasis_length = (settings.fraction * letters.len() as f64).ceil() as usize;
+        if emphasis_length == 0 {
+            continue;
+        }
+        let prefix_end = units[letters[emphasis_length.min(letters.len()) - 1]].end_token;
+        starts.insert(units[first].start_token, prefix_end);
+    }
+
+    starts
+}
+
+fn render_ansi(
+    source: &[u8],
+    tokens: &[Token],
+    starts: &BTreeMap<usize, usize>,
+    style: &mut StyleState,
+) -> Vec<u8> {
+    let mut output = Vec::with_capacity(source.len() + tokens.len() * 8);
+    let mut emphasis_end = None;
+    let mut emphasizing = false;
+    for (index, token) in tokens.iter().enumerate() {
+        if let Some(event) = starts.get(&index).filter(|_| style.known) {
+            output.extend_from_slice(b"\x1b[1m");
+            emphasizing = true;
+            emphasis_end = Some(*event);
+        }
+
+        output.extend_from_slice(&source[token.start..token.end]);
+        if let TokenKind::Control(ControlKind::Sgr) = token.kind {
+            let resets_intensity = sgr_resets_intensity(&source[token.start..token.end]);
+            style.apply_sgr(&source[token.start..token.end]);
+            if emphasizing && resets_intensity {
+                output.extend_from_slice(b"\x1b[1m");
+            }
+        } else if matches!(token.kind, TokenKind::Control(ControlKind::Other)) {
+            style.known = false;
+        }
+
+        if emphasizing && emphasis_end == Some(index + 1) {
+            restore_bold_dim(&mut output, *style);
+            emphasizing = false;
+            emphasis_end = None;
+        }
+    }
+    output
 }
 
 pub fn transform(input: &[u8], settings: &Settings, enabled: bool) -> Vec<u8> {
@@ -628,6 +633,8 @@ fn parse_escape(source: &[u8], start: usize) -> Option<(usize, ControlKind)> {
                         && sgr_params(&source[start..end]).is_some()
                     {
                         ControlKind::Sgr
+                    } else if is_presentation_neutral_control(&source[start..end]) {
+                        ControlKind::Metadata
                     } else {
                         ControlKind::Other
                     };
@@ -663,7 +670,7 @@ fn parse_escape(source: &[u8], start: usize) -> Option<(usize, ControlKind)> {
             };
             let payload = &source[start + 2..payload_end];
             let kind = if is_safe_osc(payload) {
-                ControlKind::OscMetadata
+                ControlKind::Metadata
             } else {
                 ControlKind::Other
             };
@@ -689,7 +696,13 @@ fn parse_escape(source: &[u8], start: usize) -> Option<(usize, ControlKind)> {
                 if (0x20..=0x2f).contains(&byte) {
                     index += 1;
                 } else if (0x30..=0x7e).contains(&byte) {
-                    return Some((index + 1, ControlKind::Other));
+                    let end = index + 1;
+                    let kind = if is_presentation_neutral_control(&source[start..end]) {
+                        ControlKind::Metadata
+                    } else {
+                        ControlKind::Other
+                    };
+                    return Some((end, kind));
                 } else {
                     return Some((index, ControlKind::Other));
                 }
@@ -710,6 +723,12 @@ pub(crate) fn is_safe_osc(payload: &[u8]) -> bool {
         b"8" => payload[separator + 1..].contains(&b';'),
         _ => false,
     }
+}
+
+/// Bracketed paste changes input reporting; the ASCII charset reset leaves
+/// Latin output and intensity unchanged. Both occur in older fish prompt hooks.
+pub(crate) fn is_presentation_neutral_control(sequence: &[u8]) -> bool {
+    matches!(sequence, b"\x1b[?2004h" | b"\x1b[?2004l" | b"\x1b(B")
 }
 
 fn utf8_width(byte: u8) -> usize {
@@ -1017,6 +1036,14 @@ fn drain_mode_complete(mode: &mut DrainMode, byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bracketed_paste_input_mode_does_not_disable_output_emphasis() {
+        assert_eq!(
+            transform(b"\x1b[?2004l\x1b(Breading!", &Settings::default(), true),
+            b"\x1b[?2004l\x1b(B\x1b[1mread\x1b[22ming!"
+        );
+    }
 
     #[test]
     fn terminal_metadata_does_not_disable_emphasis_or_change_payloads() {

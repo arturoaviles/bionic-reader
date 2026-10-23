@@ -6,6 +6,7 @@ if [[ ${BIONIC_READER_DISABLE-} != 1 && $- == *i* && -t 0 && -t 1 ]]; then
       _BIONIC_READER_BASH_ACTIVE=0
       _BIONIC_READER_BASH_PROMPT_ACTIVE=0
       _bionic_reader_marker() {
+        local LC_ALL=C
         local _br_quoted=
         if [[ $# -gt 1 ]]; then
           builtin printf -v _br_quoted '%q' "$2"
@@ -30,6 +31,7 @@ if [[ ${BIONIC_READER_DISABLE-} != 1 && $- == *i* && -t 0 && -t 1 ]]; then
       }
       _bionic_reader_prompt() {
         local _br_status=$?
+        _BIONIC_READER_BASH_LAST_STATUS=$_br_status
         if [[ ${_BIONIC_READER_BASH_ACTIVE-0} == 1 ]]; then
           _bionic_reader_marker END
           _BIONIC_READER_BASH_ACTIVE=0
@@ -37,7 +39,7 @@ if [[ ${BIONIC_READER_DISABLE-} != 1 && $- == *i* && -t 0 && -t 1 ]]; then
         _BIONIC_READER_BASH_PROMPT_ACTIVE=1
         return "$_br_status"
       }
-      _bionic_reader_prompt_done() { return 0; }
+      _bionic_reader_prompt_done() { return "${_BIONIC_READER_BASH_LAST_STATUS-0}"; }
       _bionic_reader_preexec() {
         if [[ ${_BIONIC_READER_BASH_ACTIVE-0} != 1 ]]; then
           _BIONIC_READER_BASH_ACTIVE=1

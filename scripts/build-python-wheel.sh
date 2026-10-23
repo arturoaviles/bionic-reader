@@ -105,17 +105,29 @@ command -v uv >/dev/null 2>&1 || {
 temporary=$(mktemp -d)
 export PIP_CACHE_DIR="$temporary/pip-cache"
 export UV_CACHE_DIR="$temporary/uv-cache"
+verify_installed_binary() {
+  local executable=$1
+  [[ $("$executable" --version) == "bionic-reader $version" ]]
+  [[ $("$executable" --style always -t reading) == $'\033[1mread\033[22ming' ]]
+  printf 'installed stdin input\n' | "$executable" --style never \
+    | cmp - <(printf 'installed stdin input\n')
+  for shell in bash zsh fish; do
+    "$executable" init "$shell" > "$temporary/init.$shell"
+    [[ -s $temporary/init.$shell ]]
+  done
+  printf 'Installed executable checks passed: %s\n' "$executable"
+}
 python3 -m venv "$temporary/pip-env"
 "$temporary/pip-env/bin/python" -m pip install --no-index --no-deps --force-reinstall "$wheel"
-"$temporary/pip-env/bin/bionic-reader" --version
+verify_installed_binary "$temporary/pip-env/bin/bionic-reader"
 
 export UV_TOOL_DIR="$temporary/uv-tools"
 export UV_TOOL_BIN_DIR="$temporary/uv-bin"
 uv venv "$temporary/uv-env"
 uv pip install --no-index --no-deps --find-links "$output_dir" \
   --python "$temporary/uv-env/bin/python" "bionic-reader==$version"
-"$temporary/uv-env/bin/bionic-reader" --version
+  verify_installed_binary "$temporary/uv-env/bin/bionic-reader"
 uv tool install --no-index --find-links "$output_dir" \
   --python "$(command -v python3)" "bionic-reader==$version"
-"$UV_TOOL_BIN_DIR/bionic-reader" --version
+  verify_installed_binary "$UV_TOOL_BIN_DIR/bionic-reader"
 printf 'Created wheel candidate %s\n' "$wheel"

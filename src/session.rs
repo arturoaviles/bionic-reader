@@ -68,8 +68,10 @@ pub fn run(
     let control_thread = spawn_control_server(
         listener,
         runtime.clone(),
-        config_path,
-        overrides,
+        ReloadSource {
+            config_path,
+            overrides,
+        },
         stop_control.clone(),
     );
 
@@ -299,11 +301,6 @@ pub fn run(
         .unwrap_or_else(|| pty_exit_code(&status)))
 }
 
-/// Generate the shell startup code for a reading session.
-pub fn init(shell: &str) -> Result<String, String> {
-    crate::shell::init(shell)
-}
-
 /// Change the active reading-session control state.
 pub fn control(command: &str) -> Result<(), String> {
     match command {
@@ -512,23 +509,28 @@ struct RuntimeState {
     ended_bypass_tokens: HashSet<String>,
 }
 
+struct ReloadSource {
+    config_path: Option<PathBuf>,
+    overrides: Overrides,
+}
+
+impl ReloadSource {
+    fn load(&self) -> Result<Settings, String> {
+        Settings::load(self.config_path.as_deref(), &self.overrides)
+    }
+}
+
 fn spawn_control_server(
     listener: UnixListener,
     state: Arc<Mutex<RuntimeState>>,
-    config_path: Option<PathBuf>,
-    overrides: Overrides,
+    reload_source: ReloadSource,
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let result = handle_control_request(
-                        &mut stream,
-                        &state,
-                        config_path.as_deref(),
-                        &overrides,
-                    );
+                    let result = handle_control_request(&mut stream, &state, &reload_source);
                     let response = match result {
                         Ok(()) => "ok\n".to_owned(),
                         Err(error) => format!("error:{error}\n"),
@@ -547,8 +549,7 @@ fn spawn_control_server(
 fn handle_control_request(
     stream: &mut UnixStream,
     state: &Arc<Mutex<RuntimeState>>,
-    config_path: Option<&Path>,
-    overrides: &Overrides,
+    reload_source: &ReloadSource,
 ) -> Result<(), String> {
     let mut request = String::new();
     stream
@@ -573,7 +574,7 @@ fn handle_control_request(
             state.enabled_override = Some(state.enabled);
         }
         "reload" => {
-            let refreshed = Settings::load(config_path, overrides)?;
+            let refreshed = reload_source.load()?;
             state.settings = refreshed;
             if state.enabled_override.is_none() {
                 state.enabled = state.settings.style != Style::Never;
@@ -986,6 +987,7 @@ struct OutputState {
     bypass_tokens: HashSet<String>,
     command_settings: Option<Settings>,
     pending_since: Option<Instant>,
+    utf8_boundary: Utf8Boundary,
 }
 
 impl OutputState {
@@ -1001,6 +1003,7 @@ impl OutputState {
             bypass_tokens: HashSet::new(),
             command_settings: None,
             pending_since: None,
+            utf8_boundary: Utf8Boundary::default(),
         }
     }
 
@@ -1046,6 +1049,7 @@ impl OutputState {
             .transforming
             .then(|| Transformer::new(snapshot.settings, true));
         self.pending_since = None;
+        self.utf8_boundary = Utf8Boundary::default();
         Ok(())
     }
 
@@ -1085,7 +1089,7 @@ impl OutputState {
     fn write_data(&mut self, bytes: &[u8], output: &mut impl Write) -> io::Result<()> {
         self.sync_bypass(output)?;
         if self.in_command && self.transforming && !self.unsafe_interval {
-            if has_unsafe_control(bytes) {
+            if has_unsafe_control(bytes, &mut self.utf8_boundary) {
                 self.flush_transformer(output)?;
                 self.transforming = false;
                 self.unsafe_interval = true;
@@ -1175,10 +1179,14 @@ fn command_is_excluded(metadata: &[u8], settings: &Settings) -> bool {
     let Ok(encoded) = std::str::from_utf8(metadata) else {
         return true;
     };
-    let command_line = match shell_words::split(encoded) {
-        Ok(words) if words.len() == 1 => words[0].clone(),
-        Ok(_) => encoded.to_owned(),
-        Err(_) => return true,
+    let decoded = decode_ansi_c_quote(encoded);
+    let command_line = match decoded {
+        Some(command) => command,
+        None => match shell_words::split(encoded) {
+            Ok(words) if words.len() == 1 => words[0].clone(),
+            Ok(_) => encoded.to_owned(),
+            Err(_) => return true,
+        },
     };
     let words = match shell_words::split(&command_line) {
         Ok(words) => words,
@@ -1240,10 +1248,91 @@ fn command_is_excluded(metadata: &[u8], settings: &Settings) -> bool {
             .any(|excluded| excluded.rsplit('/').next().unwrap_or(excluded) == basename)
 }
 
-fn has_unsafe_control(bytes: &[u8]) -> bool {
+// Bash 3.2's %q uses ANSI-C quoting for non-ASCII bytes under LC_ALL=C.
+// Decode its finite escape alphabet as data; never evaluate shell metadata.
+fn decode_ansi_c_quote(encoded: &str) -> Option<String> {
+    let bytes = encoded.strip_prefix("$'")?.strip_suffix('\'')?.as_bytes();
+    let mut output = Vec::new();
     let mut index = 0;
-    while index + 1 < bytes.len() {
-        if bytes[index] == 0x1b && bytes[index + 1] == b'[' {
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        index += 1;
+        let escaped = *bytes.get(index)?;
+        if (b'0'..=b'7').contains(&escaped) {
+            let mut value = 0_u16;
+            let mut digits = 0;
+            while digits < 3 && index < bytes.len() && (b'0'..=b'7').contains(&bytes[index]) {
+                value = value * 8 + u16::from(bytes[index] - b'0');
+                index += 1;
+                digits += 1;
+            }
+            output.push(u8::try_from(value).ok()?);
+            continue;
+        }
+        output.push(match escaped {
+            b'a' => 7,
+            b'b' => 8,
+            b'e' | b'E' => 27,
+            b'f' => 12,
+            b'n' => b'\n',
+            b'r' => b'\r',
+            b't' => b'\t',
+            b'v' => 11,
+            b'\\' | b'\'' | b'"' => escaped,
+            _ => return None,
+        });
+        index += 1;
+    }
+    String::from_utf8(output).ok()
+}
+
+#[derive(Default)]
+struct Utf8Boundary {
+    remaining: u8,
+    next_min: u8,
+    next_max: u8,
+}
+
+impl Utf8Boundary {
+    fn consumes(&mut self, byte: u8) -> bool {
+        if self.remaining > 0 {
+            if (self.next_min..=self.next_max).contains(&byte) {
+                self.remaining -= 1;
+                self.next_min = 0x80;
+                self.next_max = 0xbf;
+                return true;
+            }
+            self.remaining = 0;
+        }
+        let (remaining, next_min, next_max) = match byte {
+            0xc2..=0xdf => (1, 0x80, 0xbf),
+            0xe0 => (2, 0xa0, 0xbf),
+            0xe1..=0xec | 0xee..=0xef => (2, 0x80, 0xbf),
+            0xed => (2, 0x80, 0x9f),
+            0xf0 => (3, 0x90, 0xbf),
+            0xf1..=0xf3 => (3, 0x80, 0xbf),
+            0xf4 => (3, 0x80, 0x8f),
+            _ => return false,
+        };
+        self.remaining = remaining;
+        self.next_min = next_min;
+        self.next_max = next_max;
+        true
+    }
+}
+
+fn has_unsafe_control(bytes: &[u8], utf8_boundary: &mut Utf8Boundary) -> bool {
+    let mut index = 0;
+    while index < bytes.len() {
+        if utf8_boundary.consumes(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        if bytes[index..].starts_with(b"\x1b[") {
             let start = index + 2;
             let Some(relative_end) = bytes[start..]
                 .iter()
@@ -1252,7 +1341,9 @@ fn has_unsafe_control(bytes: &[u8]) -> bool {
                 return true;
             };
             let end = start + relative_end;
-            if bytes[end] != b'm' {
+            if bytes[end] != b'm'
+                && !crate::transform::is_presentation_neutral_control(&bytes[index..=end])
+            {
                 return true;
             }
             index = end + 1;
@@ -1269,6 +1360,11 @@ fn has_unsafe_control(bytes: &[u8]) -> bool {
                 return true;
             }
             index = end + if bytes[end] == 0x07 { 1 } else { 2 };
+        } else if bytes
+            .get(index..index + 3)
+            .is_some_and(crate::transform::is_presentation_neutral_control)
+        {
+            index += 3;
         } else if matches!(bytes[index], 0x1b | 0x90 | 0x9b | 0x9c | 0x9d | 0x9e | 0x9f) {
             return true;
         } else {

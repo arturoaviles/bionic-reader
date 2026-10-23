@@ -8,6 +8,43 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 #[cfg(unix)]
 #[test]
+fn bash_prompt_sees_the_failed_commands_exit_status() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".bashrc"), "PS1='STATUS:$? READY> '\n").unwrap();
+    let (output, status) = run_session("/bin/bash", home.path(), b"false\nexit 0\n", None);
+    assert_eq!(status, 0);
+    assert_contains(&output, b"STATUS:1 READY> ");
+}
+
+#[cfg(unix)]
+#[test]
+fn latin_utf8_continuation_bytes_are_not_terminal_controls() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let (output, status) = run_session(
+        "/bin/bash",
+        home.path(),
+        "printf 'Ûnicode reading\\n'\nexit 0\n".as_bytes(),
+        None,
+    );
+    assert_eq!(status, 0);
+    assert_contains(&output, "\x1b[1mÛnic\x1b[22mode".as_bytes());
+    assert_contains(&output, b"\x1b[1mread\x1b[22ming");
+}
+
+#[cfg(unix)]
+#[test]
+fn split_utf8_and_malformed_bytes_do_not_hang_or_disable_session_output() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let (output, status) = run_session("/bin/bash", home.path(), b"printf '\\303'; sleep 0.01; printf '\\233nicode reading\\n'\nprintf '\\377reading\\n'\nexit 0\n", None);
+    assert_eq!(status, 0);
+    assert_contains(&output, "\x1b[1mÛnic\x1b[22mode".as_bytes());
+    assert_contains(&output, b"\xff\x1b[1mread\x1b[22ming");
+}
+
+#[cfg(unix)]
+#[test]
 fn bash_command_output_is_emphasized_and_existing_hooks_are_preserved() {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
