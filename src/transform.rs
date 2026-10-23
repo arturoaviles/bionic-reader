@@ -1192,6 +1192,22 @@ mod tests {
     }
 
     #[test]
+    fn timeout_between_utf8_bytes_preserves_them_and_transforms_later_words() {
+        let mut transformer = Transformer::new(Settings::default(), true);
+        let mut actual = transformer.push(&[0xc3]);
+        assert!(actual.is_empty());
+
+        actual.extend(transformer.flush_pending());
+        actual.extend(transformer.push(b"\x9bnicode reading "));
+        actual.extend(transformer.finish());
+
+        assert_eq!(
+            actual,
+            b"\xc3\x9b\x1b[1mnic\x1b[22mode \x1b[1mread\x1b[22ming "
+        );
+    }
+
+    #[test]
     fn timed_out_word_advances_frequency_when_it_reaches_a_delimiter() {
         let settings = Settings {
             every: 2,

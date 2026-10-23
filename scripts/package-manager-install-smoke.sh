@@ -51,6 +51,8 @@ run_smoke_image() {
   local manager=$1
   local image=$2
   docker run --rm --platform "$docker_platform" \
+    --env "SMOKE_HOST_UID=$(id -u)" \
+    --env "SMOKE_HOST_GID=$(id -g)" \
     --mount "type=bind,src=$repo_root,dst=/workspace,readonly" \
     --mount "type=bind,src=$temporary,dst=/smoke" \
     --mount "type=bind,src=$temporary/packages,dst=/packages,readonly" \

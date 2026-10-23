@@ -13,6 +13,14 @@ temporary_root=/smoke
 repo_directory="$temporary_root/$manager-repository"
 identity='Bionic Reader CI install smoke <ci@bionic-reader.invalid>'
 export GNUPGHOME="$temporary_root/$manager-gnupg"
+restore_workspace_owner() {
+  # The host must be able to remove artifacts created by root in this container.
+  if [[ -n ${SMOKE_HOST_UID:-} && -n ${SMOKE_HOST_GID:-} ]]; then
+    chown -R -- "$SMOKE_HOST_UID:$SMOKE_HOST_GID" "$temporary_root"
+  fi
+}
+trap restore_workspace_owner EXIT
+
 install -d -m 700 "$GNUPGHOME"
 
 create_smoke_key() {

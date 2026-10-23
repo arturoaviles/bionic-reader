@@ -37,10 +37,21 @@ fn latin_utf8_continuation_bytes_are_not_terminal_controls() {
 fn split_utf8_and_malformed_bytes_do_not_hang_or_disable_session_output() {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
-    let (output, status) = run_session("/bin/bash", home.path(), b"printf '\\303'; sleep 0.01; printf '\\233nicode reading\\n'\nprintf '\\377reading\\n'\nexit 0\n", None);
+    let (output, status) = run_session(
+        "/bin/bash",
+        home.path(),
+        b"printf '\\303'; sleep 0.1; printf '\\233nicode reading\\n'\nprintf '\\377reading\\n'\nexit 0\n",
+        None,
+    );
     assert_eq!(status, 0);
-    assert_contains(&output, "\x1b[1mÛnic\x1b[22mode".as_bytes());
-    assert_contains(&output, b"\xff\x1b[1mread\x1b[22ming");
+    let plain = strip_sgr(&output);
+    assert_contains(&plain, "Ûnicode reading\r\n".as_bytes());
+    assert_contains(&plain, b"\xffreading\r\n");
+    assert!(
+        count(&output, b"\x1b[1mread\x1b[22ming") >= 2,
+        "output after the split UTF-8 sequence stopped being transformed: {}",
+        display(&output)
+    );
 }
 
 #[cfg(unix)]

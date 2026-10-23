@@ -57,7 +57,7 @@ for package in "${packages[@]}"; do
   rpmsign --addsign --define "_gpg_name $key_id" "$destination"
 done
 
-gpg --export "$key_id" > "$repo_dir_abs/keys/bionic-reader-archive-keyring.gpg"
+gpg --armor --export "$key_id" > "$repo_dir_abs/keys/bionic-reader-archive-keyring.gpg"
 createrepo_c --checksum sha256 "$repo_dir_abs"
 gpg --batch --yes --local-user "$key_id" --armor --detach-sign \
   --output "$repo_dir_abs/repodata/repomd.xml.asc" "$repo_dir_abs/repodata/repomd.xml"
