@@ -162,7 +162,8 @@ yarn_version=$(cd "$yarn_fixture" && yarn --version)
   printf 'Expected Yarn 4.18.1 from Corepack; found %s\n' "$yarn_version" >&2
   exit 1
 }
-(cd "$yarn_fixture" && yarn install --mode=skip-build)
+# This disposable fixture intentionally creates its first lockfile, including in CI.
+(cd "$yarn_fixture" && YARN_ENABLE_IMMUTABLE_INSTALLS=false yarn install --mode=skip-build)
 [[ -f $yarn_fixture/.pnp.cjs ]] || {
   printf 'Yarn did not create the expected Plug\x27n\x27Play loader\n' >&2
   exit 1

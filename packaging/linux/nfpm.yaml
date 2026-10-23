@@ -12,54 +12,69 @@ license: MIT
 contents:
   - src: ${BINARY}
     dst: /usr/bin/bionic-reader
+    expand: true
     file_info:
       mode: 0755
   - src: ${LICENSE}
     dst: /usr/share/licenses/bionic-reader/LICENSE
+    expand: true
     file_info:
       mode: 0644
   - src: ${README}
     dst: /usr/share/doc/bionic-reader/README.md
+    expand: true
     file_info:
       mode: 0644
   - src: ${INTEGRATIONS}/
     dst: /usr/share/bionic-reader/integrations
     type: tree
+    expand: true
     file_info:
       mode: 0644
   - src: ${CONFIG_EXAMPLE}
     dst: /usr/share/bionic-reader/config.example.toml
+    expand: true
     file_info:
       mode: 0644
   - src: ${COMPLETIONS}/
     dst: /usr/share/bionic-reader/completions
     type: tree
+    expand: true
   - src: ${COMPLETIONS}/bionic-reader.bash
     dst: /usr/share/bash-completion/completions/bionic-reader
+    expand: true
     packager: deb
   - src: ${COMPLETIONS}/bionic-reader.bash
     dst: /usr/share/bash-completion/completions/bionic-reader
+    expand: true
     packager: rpm
   - src: ${COMPLETIONS}/bionic-reader.bash
     dst: /usr/share/bash-completion/completions/bionic-reader
+    expand: true
     packager: archlinux
   - src: ${COMPLETIONS}/_bionic-reader
     dst: /usr/share/zsh/site-functions/_bionic-reader
+    expand: true
     packager: deb
   - src: ${COMPLETIONS}/_bionic-reader
     dst: /usr/share/zsh/site-functions/_bionic-reader
+    expand: true
     packager: rpm
   - src: ${COMPLETIONS}/_bionic-reader
     dst: /usr/share/zsh/site-functions/_bionic-reader
+    expand: true
     packager: archlinux
   - src: ${COMPLETIONS}/bionic-reader.fish
     dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
+    expand: true
     packager: deb
   - src: ${COMPLETIONS}/bionic-reader.fish
     dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
+    expand: true
     packager: rpm
   - src: ${COMPLETIONS}/bionic-reader.fish
     dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
+    expand: true
     packager: archlinux
 
 rpm:
