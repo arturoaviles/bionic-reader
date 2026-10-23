@@ -23,7 +23,7 @@ git clone https://github.com/arturoaviles/bionic-reader.git
 cd bionic-reader
 ```
 
-While the repository is private, you need GitHub access and an authenticated Git credential helper. If you already use GitHub SSH authentication, clone with `git clone git@github.com:arturoaviles/bionic-reader.git` instead.
+The repository is public; cloning over HTTPS does not require GitHub authentication.
 
 Until [implementation PR #2](https://github.com/arturoaviles/bionic-reader/pull/2) is merged, select its branch:
 

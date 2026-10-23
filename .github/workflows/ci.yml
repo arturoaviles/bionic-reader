@@ -163,7 +163,7 @@ jobs:
           python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
       - name: Build target wheel and smoke-test matching hosts
         run: scripts/build-python-wheel.sh '${{ matrix.target }}' "$RUNNER_TEMP/python-wheels"
-      - name: Upload private workflow candidate artifact
+      - name: Upload workflow candidate artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bionic-reader-${{ matrix.target }}
