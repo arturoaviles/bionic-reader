@@ -323,7 +323,7 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
     let startup_deadline = Instant::now() + Duration::from_secs(20);
     let init_log = home.join("bionic-reader-init-count");
     let mut initialized_at: Option<Instant> = None;
-    while !initialized_at.is_some_and(|at| at.elapsed() >= Duration::from_millis(500)) {
+    while initialized_at.is_none_or(|at| at.elapsed() < Duration::from_millis(500)) {
         if Instant::now() >= startup_deadline {
             let _ = child.kill();
             let init_calls = std::fs::read_to_string(&init_log).unwrap_or_default();

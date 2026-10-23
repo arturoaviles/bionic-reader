@@ -448,14 +448,14 @@ fn run_session_inner(
         paths.extend(std::env::split_paths(&existing));
     }
     command.env("PATH", std::env::join_paths(paths).unwrap());
-    let mut child = pair.slave.spawn_command(command).unwrap();
-    drop(pair.slave);
-
+    // Capture the caller's mode before the child can switch the PTY to raw mode.
     let terminal_fd = pair
         .master
         .as_raw_fd()
         .expect("PTY master has a file descriptor");
     let original_lflag = terminal_lflag(terminal_fd);
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().unwrap();
     let mut writer = pair.master.take_writer().unwrap();
     let (sender, receiver) = mpsc::channel();

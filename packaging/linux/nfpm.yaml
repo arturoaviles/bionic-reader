@@ -62,10 +62,6 @@ contents:
     dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
     packager: archlinux
 
-deb:
-  section: utils
-  priority: optional
-
 rpm:
   group: Applications/Text
   compression: zstd
