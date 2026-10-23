@@ -138,4 +138,5 @@ case "$manager" in
 esac
 
 verify_installed_package
+python3 "$repo_root/scripts/check-installed-cli.py" "$(command -v bionic-reader)"
 printf '%s package installation smoke passed for bionic-reader %s\n' "$manager" "$expected_version"

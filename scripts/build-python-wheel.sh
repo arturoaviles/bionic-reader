@@ -108,13 +108,7 @@ export UV_CACHE_DIR="$temporary/uv-cache"
 verify_installed_binary() {
   local executable=$1
   [[ $("$executable" --version) == "bionic-reader $version" ]]
-  [[ $("$executable" --style always -t reading) == $'\033[1mread\033[22ming' ]]
-  printf 'installed stdin input\n' | "$executable" --style never \
-    | cmp - <(printf 'installed stdin input\n')
-  for shell in bash zsh fish; do
-    "$executable" init "$shell" > "$temporary/init.$shell"
-    [[ -s $temporary/init.$shell ]]
-  done
+  python3 "$repo_root/scripts/check-installed-cli.py" "$executable"
   printf 'Installed executable checks passed: %s\n' "$executable"
 }
 python3 -m venv "$temporary/pip-env"
@@ -126,8 +120,8 @@ export UV_TOOL_BIN_DIR="$temporary/uv-bin"
 uv venv "$temporary/uv-env"
 uv pip install --no-index --no-deps --find-links "$output_dir" \
   --python "$temporary/uv-env/bin/python" "bionic-reader==$version"
-  verify_installed_binary "$temporary/uv-env/bin/bionic-reader"
+verify_installed_binary "$temporary/uv-env/bin/bionic-reader"
 uv tool install --no-index --find-links "$output_dir" \
   --python "$(command -v python3)" "bionic-reader==$version"
-  verify_installed_binary "$UV_TOOL_BIN_DIR/bionic-reader"
+verify_installed_binary "$UV_TOOL_BIN_DIR/bionic-reader"
 printf 'Created wheel candidate %s\n' "$wheel"

@@ -122,7 +122,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__bypass)
+        bionic__reader__subcmd__bypass)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -160,7 +160,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__completions)
+        bionic__reader__subcmd__completions)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help bash zsh fish"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -198,7 +198,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help)
+        bionic__reader__subcmd__help)
             opts="session init completions on off toggle reload bypass help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -212,7 +212,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__bypass)
+        bionic__reader__subcmd__help__subcmd__bypass)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -226,7 +226,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__completions)
+        bionic__reader__subcmd__help__subcmd__completions)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -240,7 +240,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__help)
+        bionic__reader__subcmd__help__subcmd__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -254,7 +254,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__init)
+        bionic__reader__subcmd__help__subcmd__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -268,7 +268,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__off)
+        bionic__reader__subcmd__help__subcmd__off)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -282,7 +282,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__on)
+        bionic__reader__subcmd__help__subcmd__on)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -296,7 +296,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__reload)
+        bionic__reader__subcmd__help__subcmd__reload)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -310,7 +310,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__session)
+        bionic__reader__subcmd__help__subcmd__session)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -324,7 +324,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__help__subcmd__toggle)
+        bionic__reader__subcmd__help__subcmd__toggle)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -338,7 +338,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__init)
+        bionic__reader__subcmd__init)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help bash zsh fish"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -376,7 +376,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__off)
+        bionic__reader__subcmd__off)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -414,7 +414,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__on)
+        bionic__reader__subcmd__on)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -452,7 +452,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__reload)
+        bionic__reader__subcmd__reload)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -490,7 +490,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__session)
+        bionic__reader__subcmd__session)
             opts="-h --shell --fraction --every --min-word-length --style --config --exclude --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -532,7 +532,7 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        bionic__subcmd__reader__subcmd__toggle)
+        bionic__reader__subcmd__toggle)
             opts="-h --fraction --every --min-word-length --style --config --exclude --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

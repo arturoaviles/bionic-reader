@@ -16,6 +16,24 @@ scripts/check-distribution.sh
 
 The test suite includes unit, CLI, and PTY/session coverage. Session tests need the shells they exercise. Distribution checks require Bash, Zsh, fish, ShellCheck, Node.js, Python 3, Ruff, and mypy. For dependency advisories, install the pinned `cargo-audit` version listed by CI and run `cargo audit` when its advisory database is reachable. A missing tool is a local environment setup issue; CI installs the required checkers explicitly.
 
+## Build, install, and use checks
+
+The `source-install` CI job installs the checkout with Cargo into a temporary root, exercises the installed binary, and uninstalls it. It covers Linux and macOS on x86-64 and ARM64 with Rust 1.85.1, plus current stable Rust on Linux x86-64. The six-target candidate build matrix also extracts each native archive and exercises its executable on the matching host architecture.
+
+To reproduce the installation check without changing your normal Cargo installation:
+
+```sh
+install_root=$(mktemp -d)
+cargo install --path . --locked --root "$install_root"
+python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
+cargo uninstall --root "$install_root" bionic-reader
+rm -rf "$install_root"
+```
+
+The checker requires Python 3.9 or newer and `/bin/bash`. It isolates HOME and XDG configuration and verifies text/stdin behavior, ANSI output, configuration precedence, shell initialization and completions, session controls, and a real PTY reading session. Pass the actual installed binary path; the checker does not substitute a build-tree executable.
+
+Workflow changes are checked with [actionlint](https://github.com/rhysd/actionlint) 1.7.12, including GitHub expression contexts and inline shell scripts. Run `actionlint` locally when editing `.github/workflows/`. Actions are pinned to verified commit SHAs. CI has read-only repository permissions, timeouts, and cancellation of superseded runs. The separate dependency-security workflow runs Cargo audit on dependency changes, weekly after merge, and on manual dispatch.
+
 ## Candidate binaries
 
 `scripts/build-release.sh` builds six local archive candidates:

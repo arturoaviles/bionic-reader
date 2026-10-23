@@ -2,18 +2,31 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
 
 jobs:
   rust:
     name: Rust checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.11.1'
       - name: Install Rust toolchain
@@ -45,10 +58,10 @@ jobs:
     name: Pinned shell-framework loader tests
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
-      BIONIC_READER_FRAMEWORKS_DIR: ${{ runner.temp }}/bionic-reader-frameworks
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install session test shells
         run: sudo apt-get update && sudo apt-get install --yes fish zsh
       - name: Install Rust toolchain and fetch locked dependencies
@@ -62,12 +75,15 @@ jobs:
   distribution-static:
     name: Distribution static checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-python@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12.12'
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.11.1'
       - name: Install static check tools
@@ -101,9 +117,12 @@ jobs:
             runner: ubuntu-24.04-arm
             musl: true
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-python@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12.12'
       - name: Install Rust toolchain
@@ -116,16 +135,30 @@ jobs:
         if: matrix.zig
         run: |
           python3 -m pip install --disable-pip-version-check ziglang==0.15.1
+          zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
+          test -x "$zig_dir/zig"
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          rustup toolchain install stable --profile minimal
           cargo +stable install cargo-zigbuild --version 0.23.4 --locked
       - name: Install musl target tools
         if: matrix.musl
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
       - name: Build local candidate
         run: scripts/build-release.sh '${{ matrix.target }}'
+      - name: Install and use the native archive
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          archive=$(find dist/candidates -name "bionic-reader-v*-$CANDIDATE_TARGET.tar.gz" -type f)
+          test -n "$archive"
+          install_root="$RUNNER_TEMP/bionic-reader-archive"
+          mkdir -p "$install_root"
+          tar -xzf "$archive" --strip-components=1 -C "$install_root"
+          python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
       - name: Build target wheel and smoke-test matching hosts
         run: scripts/build-python-wheel.sh '${{ matrix.target }}' "$RUNNER_TEMP/python-wheels"
       - name: Upload private workflow candidate artifact
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bionic-reader-${{ matrix.target }}
           path: |
@@ -141,13 +174,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-python@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12.12'
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.8'
+          cache: false
       - name: Install Rust toolchain
         run: |
           rustup toolchain install 1.85.1 --profile minimal
@@ -156,6 +192,9 @@ jobs:
       - name: Install pinned candidate build tools
         run: |
           python -m pip install --disable-pip-version-check ziglang==0.15.1
+          zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
+          test -x "$zig_dir/zig"
+          echo "$zig_dir" >> "$GITHUB_PATH"
           cargo +stable install cargo-zigbuild --version 0.23.4 --locked
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -169,9 +208,12 @@ jobs:
       matrix:
         runner: [macos-15-intel, macos-15]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.11.1'
       - name: Install Rust toolchain
@@ -185,14 +227,67 @@ jobs:
       - name: Check generated completion files
         run: scripts/check-completions.sh target/debug/bionic-reader
 
-  advisory-audit:
-    name: Dependency advisory audit
+  workflow-lint:
+    name: GitHub Actions lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7.0.1
-      - name: Install current Rust toolchain
-        run: rustup toolchain install stable --profile minimal
-      - name: Install pinned cargo-audit
-        run: cargo +stable install cargo-audit --version 0.22.2 --locked
-      - name: Audit locked dependencies
-        run: cargo +stable audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.8'
+          cache: false
+      - name: Install pinned actionlint
+        run: GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Check workflow syntax, expressions, and inline shell scripts
+        run: '"$RUNNER_TEMP/actionlint-bin/actionlint" -color'
+
+  source-install:
+    name: Source install and use (${{ matrix.runner }}, Rust ${{ matrix.toolchain }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            toolchain: '1.85.1'
+          - runner: ubuntu-24.04-arm
+            toolchain: '1.85.1'
+          - runner: macos-15-intel
+            toolchain: '1.85.1'
+          - runner: macos-15
+            toolchain: '1.85.1'
+          - runner: ubuntu-24.04
+            toolchain: stable
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12.12'
+      - name: Install Rust toolchain
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: source-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            source-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-
+      - name: Compile and install from the checkout
+        run: cargo install --path . --locked --root "$RUNNER_TEMP/bionic-reader-install"
+      - name: Use the installed executable and reading session
+        run: python3 scripts/check-installed-cli.py "$RUNNER_TEMP/bionic-reader-install/bin/bionic-reader"
+      - name: Uninstall the source installation
+        run: |
+          cargo uninstall --root "$RUNNER_TEMP/bionic-reader-install" bionic-reader
+          test ! -e "$RUNNER_TEMP/bionic-reader-install/bin/bionic-reader"

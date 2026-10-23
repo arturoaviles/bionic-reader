@@ -19,8 +19,8 @@ _bionic-reader() {
 '--text=[Transform this text instead of reading stdin]:TEXT:_default' \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -41,8 +41,8 @@ _arguments "${_arguments_options[@]}" : \
 '--shell=[Bash, Zsh, or fish executable (defaults to SHELL)]:SHELL:_default' \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -53,8 +53,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -66,8 +66,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -79,8 +79,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -91,8 +91,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -103,8 +103,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -115,8 +115,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \
@@ -127,8 +127,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
 '--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
-'--min-word-length=[]:MIN_WORD_LENGTH:_default' \
-'--style=[]:STYLE:(auto always never)' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:(auto always never)' \
 '--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
 '*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
 '-h[Print help]' \

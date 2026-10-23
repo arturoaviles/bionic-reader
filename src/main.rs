@@ -22,8 +22,10 @@ struct Cli {
     /// Emphasize the first eligible word and then every Nth word.
     #[arg(long, global = true)]
     every: Option<usize>,
+    /// Minimum number of letters a word must have to receive emphasis.
     #[arg(long, global = true)]
     min_word_length: Option<usize>,
+    /// When to apply emphasis: automatically for terminals, always, or never.
     #[arg(long, global = true, value_enum)]
     style: Option<Style>,
     /// Read an explicit TOML configuration file.
@@ -119,7 +121,24 @@ fn run() -> Result<i32, Failure> {
             // The generator treats a writer error as a panic. Buffer its finite
             // output so a closed downstream pipe follows the normal I/O path.
             let mut generated = Vec::new();
-            clap_complete::generate(shell, &mut Cli::command(), "bionic-reader", &mut generated);
+            let binary_name = if shell == clap_complete::Shell::Bash {
+                // clap_complete 4.6.11 formats Bash subcommand cases from the
+                // bin name differently from its command-state assignments.
+                // A normalized root name keeps those generated identifiers in
+                // sync; restore the executable name in Bash's registration.
+                "bionic__reader"
+            } else {
+                "bionic-reader"
+            };
+            clap_complete::generate(shell, &mut Cli::command(), binary_name, &mut generated);
+            if shell == clap_complete::Shell::Bash {
+                let generated = String::from_utf8(generated)
+                    .expect("clap_complete generates UTF-8 shell completions")
+                    .replace("default bionic__reader", "default bionic-reader")
+                    .into_bytes();
+                io::stdout().lock().write_all(&generated)?;
+                return Ok(0);
+            }
             io::stdout().lock().write_all(&generated)?;
             return Ok(0);
         }

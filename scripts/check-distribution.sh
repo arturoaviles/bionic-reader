@@ -52,6 +52,6 @@ touch \
   --output "$temporary/bionic-reader.rb"
 ruby -c "$temporary/bionic-reader.rb"
 ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path) }' \
-  packaging/linux/nfpm.yaml packaging/snap/snapcraft.yaml.in .github/workflows/ci.yml
+  packaging/linux/nfpm.yaml packaging/snap/snapcraft.yaml.in .github/workflows/*.yml
 
 printf 'Distribution source checks passed. Native artifact and external registry checks remain release gates.\n'
