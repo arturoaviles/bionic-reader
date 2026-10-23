@@ -20,6 +20,7 @@ Validation performed on 2026-10-23. The implementation and independent standards
 | Local npm, Yarn 4.18.1 Plug’n’Play, and pnpm 12.14.0 installs on macOS ARM64 | Passed using candidate tarballs and the real native executable |
 | Archive creation | Reproducibility and recursive integration/completion asset tests passed |
 | Fresh source installation | Cargo install, installed CLI and PTY checks, and uninstall passed on macOS ARM64 and Debian ARM64 with Rust 1.85.1 |
+| Cargo/crates.io candidate on macOS ARM64, Rust 1.85.1 | Verified 36-file archive, extracted-source install, installed CLI/PTY checks, uninstall, all 73 packaged-source tests, and `cargo publish --dry-run --locked` passed; no upload occurred |
 | Workflow validation | actionlint 1.7.12, including expression-context validation and inline ShellCheck, passed |
 | Copilot regressions | Real Bash subcommand/value completion and flag-help tests passed; both review threads resolved |
 
@@ -32,6 +33,8 @@ The standards review identified four concerns, all resolved and rechecked: compi
 The follow-up CI review fixed both Copilot comments: the upstream Bash generator's hyphenated-name dispatch mismatch and missing help descriptions for `--min-word-length` and `--style`. It added executable smoke checks shared by Cargo installs, native archives, pip/uv wheels, and native package-manager installs. The independent standards review found duplicated text/stdin smoke checks, which were consolidated; its follow-up and the spec review reported no remaining findings.
 
 The first executing GitHub run exposed additional environment defects: unavailable macOS Python builds, an insufficient Go compiler for nFPM, a Linux Clippy warning, and insecure hosted-runner Zsh completion directories. CI now uses a Python version present in the official manifest for every runner architecture, the required Go compiler, direct token encoding, and corrected runner directory permissions while preserving framework security checks. Timing-sensitive CLI and split-UTF-8 expectations were replaced with deterministic timeout regressions and external stream coverage. The terminal-restoration harness now captures its baseline before the child starts. Native repository checks also fixed Debian metadata placement, content-path variable expansion, RPM 6 public-key import, and host ownership of container-created artifacts. The workflow also has pinned action commits, read-only permissions, timeouts, cancellation of superseded runs, and a separate scheduled RustSec audit.
+
+Cargo is now included in the first-release distribution coverage. The crate's explicit file list and archive audit include runtime assets, all tests, and their support files while excluding developer state and unrelated tooling. CI installs the archive across the source-install matrix and runs the full packaged-source suite on Linux x86-64. The independent Cargo standards and spec reviews reported no remaining findings. crates.io publication and name ownership remain release prerequisites.
 
 ## Release verification still required
 
