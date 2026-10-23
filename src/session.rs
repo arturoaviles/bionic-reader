@@ -728,7 +728,13 @@ fn random_token() -> Result<String, String> {
     random
         .read_exact(&mut bytes)
         .map_err(|error| format!("could not create a session token: {error}"))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        token.push(char::from(HEX[usize::from(byte >> 4)]));
+        token.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(token)
 }
 
 fn resolve_shell(shell: Option<&str>) -> Result<(&'static str, OsString), String> {

@@ -201,15 +201,9 @@ fn run() -> Result<i32, Failure> {
 fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Result<()> {
     let mut input = io::stdin().lock();
     let mut buffer = [0_u8; 8192];
-    let deadline = Duration::from_millis(50);
-    let mut pending_since: Option<Instant> = None;
+    let mut flush_timer = PendingFlushTimer::default();
     loop {
-        let wait = pending_since.map_or(-1, |started| {
-            deadline
-                .saturating_sub(started.elapsed())
-                .as_millis()
-                .max(1) as i32
-        });
+        let wait = flush_timer.poll_timeout(Instant::now());
         let mut descriptor = libc::pollfd {
             fd: libc::STDIN_FILENO,
             events: libc::POLLIN,
@@ -232,11 +226,11 @@ fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Res
                 }
                 Ok(count) => {
                     let bytes = renderer.push(&buffer[..count]);
-                    if !renderer.has_pending() {
-                        pending_since = None;
-                    } else if pending_since.is_none() || !bytes.is_empty() {
-                        pending_since = Some(Instant::now());
-                    }
+                    flush_timer.observe_input(
+                        renderer.has_pending(),
+                        !bytes.is_empty(),
+                        Instant::now(),
+                    );
                     if !bytes.is_empty() {
                         output.write_all(&bytes)?;
                         output.flush()?;
@@ -246,10 +240,121 @@ fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Res
                 Err(error) => return Err(error),
             }
         }
-        if pending_since.is_some_and(|started| started.elapsed() >= deadline) {
+        let now = Instant::now();
+        if flush_timer.is_due(now) {
             output.write_all(&renderer.flush_pending())?;
             output.flush()?;
-            pending_since = renderer.has_pending().then(Instant::now);
+            flush_timer.after_flush(renderer.has_pending(), Instant::now());
         }
+    }
+}
+
+const PARTIAL_WORD_DEADLINE: Duration = Duration::from_millis(50);
+
+#[derive(Default)]
+struct PendingFlushTimer {
+    started: Option<Instant>,
+}
+
+impl PendingFlushTimer {
+    fn observe_input(&mut self, has_pending: bool, emitted_output: bool, now: Instant) {
+        if !has_pending {
+            self.started = None;
+        } else if self.started.is_none() || emitted_output {
+            self.started = Some(now);
+        }
+    }
+
+    fn poll_timeout(&self, now: Instant) -> i32 {
+        self.started.map_or(-1, |started| {
+            PARTIAL_WORD_DEADLINE
+                .saturating_sub(now.saturating_duration_since(started))
+                .as_millis()
+                .max(1) as i32
+        })
+    }
+
+    fn is_due(&self, now: Instant) -> bool {
+        self.started
+            .is_some_and(|started| now.saturating_duration_since(started) >= PARTIAL_WORD_DEADLINE)
+    }
+
+    fn after_flush(&mut self, has_pending: bool, now: Instant) {
+        self.started = has_pending.then_some(now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PARTIAL_WORD_DEADLINE, PendingFlushTimer};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_new_partial_word_after_an_idle_period_gets_a_fresh_deadline() {
+        let start = Instant::now();
+        let mut timer = PendingFlushTimer::default();
+
+        timer.observe_input(true, false, start);
+        let first_flush = start + PARTIAL_WORD_DEADLINE;
+        assert!(timer.is_due(first_flush));
+        timer.after_flush(false, first_flush);
+
+        let idle_end = first_flush + Duration::from_millis(95);
+        timer.observe_input(false, true, idle_end);
+        assert_eq!(timer.poll_timeout(idle_end), -1);
+
+        timer.observe_input(true, false, idle_end);
+        assert_eq!(
+            timer.poll_timeout(idle_end),
+            PARTIAL_WORD_DEADLINE.as_millis() as i32
+        );
+        assert!(!timer.is_due(idle_end + PARTIAL_WORD_DEADLINE - Duration::from_millis(1)));
+        assert!(timer.is_due(idle_end + PARTIAL_WORD_DEADLINE));
+    }
+
+    #[test]
+    fn a_partial_chunk_without_output_preserves_its_deadline() {
+        let start = Instant::now();
+        let mut timer = PendingFlushTimer::default();
+
+        timer.observe_input(true, false, start);
+        let next_chunk = start + Duration::from_millis(10);
+        timer.observe_input(true, false, next_chunk);
+
+        assert_eq!(
+            timer.poll_timeout(next_chunk),
+            (PARTIAL_WORD_DEADLINE - Duration::from_millis(10)).as_millis() as i32
+        );
+        assert!(!timer.is_due(start + PARTIAL_WORD_DEADLINE - Duration::from_millis(1)));
+        assert!(timer.is_due(start + PARTIAL_WORD_DEADLINE));
+    }
+
+    #[test]
+    fn emitted_output_starts_a_fresh_deadline_for_a_trailing_partial_word() {
+        let start = Instant::now();
+        let mut timer = PendingFlushTimer::default();
+
+        timer.observe_input(true, false, start);
+        let output_emitted = start + Duration::from_millis(10);
+        timer.observe_input(true, true, output_emitted);
+
+        assert_eq!(
+            timer.poll_timeout(output_emitted),
+            PARTIAL_WORD_DEADLINE.as_millis() as i32
+        );
+        assert!(!timer.is_due(output_emitted + PARTIAL_WORD_DEADLINE - Duration::from_millis(1)));
+        assert!(timer.is_due(output_emitted + PARTIAL_WORD_DEADLINE));
+    }
+
+    #[test]
+    fn completed_input_clears_the_pending_deadline() {
+        let start = Instant::now();
+        let mut timer = PendingFlushTimer::default();
+
+        timer.observe_input(true, false, start);
+        timer.observe_input(false, true, start + Duration::from_millis(10));
+
+        assert_eq!(timer.poll_timeout(start + Duration::from_secs(1)), -1);
+        assert!(!timer.is_due(start + Duration::from_secs(1)));
     }
 }

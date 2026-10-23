@@ -301,7 +301,7 @@ fn stalled_partial_word_is_flushed_and_its_remainder_stays_plain() {
 }
 
 #[test]
-fn a_new_word_receives_its_own_flush_deadline_after_an_idle_period() {
+fn a_new_word_after_an_idle_period_is_transformed() {
     let home = tempfile::tempdir().unwrap();
     let mut child = command(home.path())
         .args(["--style", "always"])
@@ -316,9 +316,7 @@ fn a_new_word_receives_its_own_flush_deadline_after_an_idle_period() {
     stdout.read_exact(&mut prefix).unwrap();
     assert_eq!(&prefix, b"\x1b[1mhel\x1b[22mlo ");
     std::thread::sleep(Duration::from_millis(95));
-    stdin.write_all(b"read").unwrap();
-    std::thread::sleep(Duration::from_millis(10));
-    stdin.write_all(b"ing ").unwrap();
+    stdin.write_all(b"reading ").unwrap();
     drop(stdin);
     let mut remainder = Vec::new();
     stdout.read_to_end(&mut remainder).unwrap();

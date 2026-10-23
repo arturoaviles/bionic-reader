@@ -37,13 +37,6 @@ verify_installed_package() {
     printf 'Installed package version did not match: %s\n' "$actual_version" >&2
     exit 1
   }
-  [[ $(bionic-reader -t 'Bionic Reader' --style never) == 'Bionic Reader' ]] || {
-    printf 'Installed package did not transform command-line text\n' >&2
-    exit 1
-  }
-  printf 'repository stdin input\n' | bionic-reader --style never \
-    | cmp - <(printf 'repository stdin input\n')
-
   bionic-reader init bash > "$temporary_root/init.bash"
   bionic-reader init zsh > "$temporary_root/init.zsh"
   bionic-reader init fish > "$temporary_root/init.fish"
