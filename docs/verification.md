@@ -22,7 +22,7 @@ Validation performed on 2026-10-23. The implementation and independent standards
 | Local npm, Yarn 4.18.1 Plug’n’Play, and pnpm 12.14.0 installs on macOS ARM64 | Passed using candidate tarballs and the real native executable |
 | Archive creation | Reproducibility and recursive integration/completion asset tests passed |
 | Fresh source installation | Cargo install, installed CLI and PTY checks, and uninstall passed on macOS ARM64 and Debian ARM64 with Rust 1.85.1 |
-| Cargo/crates.io candidate on macOS ARM64, Rust 1.85.1 | Verified 36-file archive, extracted-source install, installed CLI/PTY checks, uninstall, all 73 packaged-source tests, and `cargo publish --dry-run --locked` passed; no upload occurred |
+| Cargo/crates.io candidate on macOS ARM64, Rust 1.85.1 | Verified 36-file archive, extracted-source install, installed CLI/PTY checks, uninstall, all 75 packaged-source tests, and the Rustdoc example passed; the earlier `cargo publish --dry-run --locked` passed without uploading |
 | Workflow validation | actionlint 1.7.12, including expression-context validation and inline ShellCheck, passed |
 | Copilot regressions | Real Bash subcommand/value completion and flag-help tests passed; both review threads resolved |
 
@@ -41,6 +41,8 @@ Cargo is now included in the first-release distribution coverage. The crate's ex
 The Google Rust style review covers production code and Rust tests. [The style policy](rust-style.md) records the guide's application-code and platform exceptions. Changes include module and import conventions, public API/error/panic documentation, `must_use`, contextual test failures, borrowed configuration merging, and safe wrappers around necessary POSIX operations. `Transformer` now borrows configuration at construction and retains only its three emphasis values; a regression verifies that later configuration changes apply to a new stream. Unused per-command settings and unnecessary session configuration clones were removed. Terminal detection now uses safe standard-library APIs. Poisoned session mutexes return an error without accessing potentially inconsistent state; a regression test checks command and bypass rejection. Cargo lints enforce the mechanical rules, and CI builds Rustdoc and executes its examples. Zsh and fish completions were regenerated for the documented style values.
 
 The independent Google-style standards review found unnecessary configuration clones, stale per-command fields, and an incomplete API description of byte preservation. These were fixed and re-reviewed with no remaining findings. The separate spec review found no behavior regressions; its documentation precision note was corrected. The parent reviewed and integrated both reports, then reran all 75 tests, the seven real framework loaders, and the Rustdoc example on Rust 1.85.1.
+
+The executing Linux CI run exposed an existing race in the terminal-resize test: input forwarding could run `stty size` before the asynchronous resize signal reached the inner PTY. The test now polls for the observed inner dimensions with a fixed attempt limit, and prints the expected dimensions only after a successful observation. Its echoed command cannot satisfy the assertion. The terminal suite passed in a Debian ARM64 container, followed by 50 resize repetitions there and 20 on macOS ARM64.
 
 ## Release verification still required
 

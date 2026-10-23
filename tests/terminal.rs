@@ -40,7 +40,15 @@ fn prompts_are_immediate_and_resize_editing_multiline_and_eof_work() {
         result, 0,
         "deliver the terminal resize signal to the test child"
     );
-    terminal.send(b"stty size\n");
+    // Signal forwarding and input forwarding run independently. Observe the
+    // inner PTY's new dimensions before continuing with the editing checks.
+    terminal.send(
+        b"expected_rows=37; expected_columns=113; \
+        for ((attempt = 0; attempt < 200; attempt++)); do \
+        size=$(stty size); \
+        if [[ $size == \"$expected_rows $expected_columns\" ]]; then \
+        printf '%s\\n' \"$size\"; break; fi; sleep 0.01; done\n",
+    );
     terminal.expect(b"37 113\r\n");
     terminal.expect(PROMPT);
     terminal.send(b"printf 'editingX");
