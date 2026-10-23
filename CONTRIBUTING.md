@@ -34,6 +34,16 @@ The checker requires Python 3.9 or newer and `/bin/bash`. It isolates HOME and X
 
 Workflow changes are checked with [actionlint](https://github.com/rhysd/actionlint) 1.7.12, including GitHub expression contexts and inline shell scripts. Run `actionlint` locally when editing `.github/workflows/`. Actions are pinned to verified commit SHAs. CI has read-only repository permissions, timeouts, and cancellation of superseded runs. The separate dependency-security workflow runs Cargo audit on dependency changes, weekly after merge, and on manual dispatch.
 
+## Secret scanning
+
+The separate secret-scanning workflow runs Gitleaks 8.30.1 on every pull request, pushes to `main`, weekly after merge, and manual dispatch. It fetches the full Git history, scans all fetched refs, redacts detected values, and fails when a secret is found. The Linux binary is pinned by version and SHA-256; the workflow uses read-only repository permissions.
+
+With the same [Gitleaks release](https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1) installed, reproduce the scan locally:
+
+```sh
+gitleaks git --log-opts="--all" --redact=100 --no-banner --exit-code=1 .
+```
+
 ## Cargo crate validation
 
 Cargo is a first-release distribution route through crates.io. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling.

@@ -15,6 +15,7 @@ Validation performed on 2026-10-23. The implementation and independent standards
 | Python Ruff, formatting, compilation, and strict mypy | Passed |
 | Node syntax and native launcher integration | Passed |
 | YAML, Homebrew formula syntax, package metadata, and generated completions | Passed |
+| Gitleaks 8.30.1 | Full fetched-history scan passed; a synthetic deleted-token fixture failed as expected with its value redacted |
 | Cargo audit 0.22.2 | No reported advisories in the 70 locked dependencies |
 | macOS ARM64 wheel | Built and installed through pip, `uv pip`, and `uv tool`; each installed executable passed the shared CLI and PTY smoke checker |
 | Local npm, Yarn 4.18.1 Plug’n’Play, and pnpm 12.14.0 installs on macOS ARM64 | Passed using candidate tarballs and the real native executable |
