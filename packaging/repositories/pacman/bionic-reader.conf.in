@@ -1,0 +1,3 @@
+[bionic-reader]
+SigLevel = Required DatabaseRequired
+Server = @REPOSITORY_URL@/$arch

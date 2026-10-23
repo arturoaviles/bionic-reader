@@ -1,0 +1,9 @@
+# Bionic Reader reads this file from $XDG_CONFIG_HOME/bionic-reader/config.toml
+# or ~/.config/bionic-reader/config.toml.
+fraction = 0.5
+every = 1
+min_word_length = 2
+style = "auto"
+
+# These names are appended to the built-in safety exclusions.
+exclude_commands = ["my-pager"]

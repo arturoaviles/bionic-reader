@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.85.1
+      - name: Install session test shells
+        run: sudo apt-get update && sudo apt-get install --yes fish zsh
+      - name: Install pinned Corepack in a temporary tool prefix
+        run: |
+          npm --cache "$RUNNER_TEMP/corepack-npm-cache" install \
+            --prefix "$RUNNER_TEMP/bionic-reader-node-tools" \
+            --ignore-scripts --no-save --no-audit --no-fund --package-lock=false \
+            corepack@0.36.0
+          echo "$RUNNER_TEMP/bionic-reader-node-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Check and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Unit, CLI, and PTY tests
+        run: cargo test --locked --all-targets
+      - name: Check generated completion files
+        run: scripts/check-completions.sh target/debug/bionic-reader
+      - name: Test offline npm, Yarn PnP, and pnpm installs
+        run: scripts/check-node-package-installs.sh target/debug/bionic-reader
+
+  framework-loader-tests:
+    name: Pinned shell-framework loader tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BIONIC_READER_FRAMEWORKS_DIR: ${{ runner.temp }}/bionic-reader-frameworks
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install session test shells
+        run: sudo apt-get update && sudo apt-get install --yes fish zsh
+      - name: Install Rust toolchain and fetch locked dependencies
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          cargo fetch --locked
+      - name: Fetch and test pinned upstream framework loaders
+        run: scripts/check-frameworks.sh
+
+  distribution-static:
+    name: Distribution static checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12.12'
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install static check tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fish shellcheck zsh
+          python -m pip install --disable-pip-version-check -r packaging/python/requirements-checks.txt
+      - name: Check package sources
+        run: scripts/check-distribution.sh
+
+  target-builds:
+    name: Candidate build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            zig: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            zig: true
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            musl: true
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12.12'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Install pinned Python packaging tools
+        run: python3 -m pip install --disable-pip-version-check maturin==1.15.0 uv==0.13.5
+      - name: Install GNU target build tools
+        if: matrix.zig
+        run: |
+          python3 -m pip install --disable-pip-version-check ziglang==0.15.1
+          cargo +stable install cargo-zigbuild --version 0.23.4 --locked
+      - name: Install musl target tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Build local candidate
+        run: scripts/build-release.sh '${{ matrix.target }}'
+      - name: Build target wheel and smoke-test matching hosts
+        run: scripts/build-python-wheel.sh '${{ matrix.target }}' "$RUNNER_TEMP/python-wheels"
+      - name: Upload private workflow candidate artifact
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: bionic-reader-${{ matrix.target }}
+          path: |
+            dist/candidates/v*/bionic-reader-v*-${{ matrix.target }}.tar.gz
+            dist/candidates/v*/SHA256SUMS
+            ${{ runner.temp }}/python-wheels/*.whl
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  linux-package-install-smoke:
+    name: Signed Debian, Fedora, and Arch install smokes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12.12'
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.25.8'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          rustup toolchain install stable --profile minimal
+      - name: Install pinned candidate build tools
+        run: |
+          python -m pip install --disable-pip-version-check ziglang==0.15.1
+          cargo +stable install cargo-zigbuild --version 0.23.4 --locked
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build signed-repository candidates and install in distro containers
+        run: scripts/package-manager-install-smoke.sh
+
+  macos-shell-tests:
+    name: macOS shell tests (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Install fish
+        run: brew install fish
+      - name: Unit, CLI, PTY, and launcher tests on macOS Bash 3.2
+        run: cargo test --locked --all-targets
+      - name: Check generated completion files
+        run: scripts/check-completions.sh target/debug/bionic-reader
+
+  advisory-audit:
+    name: Dependency advisory audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install current Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Install pinned cargo-audit
+        run: cargo +stable install cargo-audit --version 0.22.2 --locked
+      - name: Audit locked dependencies
+        run: cargo +stable audit

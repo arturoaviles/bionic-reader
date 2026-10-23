@@ -1,0 +1,16 @@
+/target/
+/dist/
+/.venv/
+/venv/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+/packaging/npm/.stage.*/
+/packaging/python/wheels/
+/packaging/python/.venv/
+/packaging/python/bionic_reader.data/
+/.snap/
+/.snapcraft/
+.DS_Store

@@ -1,0 +1,33 @@
+[package]
+name = "bionic-reader"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Configurable bionic reading for text streams and interactive shells"
+license = "MIT"
+repository = "https://github.com/arturoaviles/bionic-reader"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+libc = "0.2"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+shell-words = "1"
+signal-hook = "0.3"
+tempfile = "3"
+toml = "0.9"
+unicode-script = "0.5"
+unicode-segmentation = "1.12"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.release]
+lto = "thin"
+strip = true

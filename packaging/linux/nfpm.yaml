@@ -1,0 +1,74 @@
+name: bionic-reader
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: arturoaviles and contributors
+description: Local word-prefix emphasis for text streams and terminal sessions
+homepage: https://github.com/arturoaviles/bionic-reader
+license: MIT
+
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/bionic-reader
+    file_info:
+      mode: 0755
+  - src: ${LICENSE}
+    dst: /usr/share/licenses/bionic-reader/LICENSE
+    file_info:
+      mode: 0644
+  - src: ${README}
+    dst: /usr/share/doc/bionic-reader/README.md
+    file_info:
+      mode: 0644
+  - src: ${INTEGRATIONS}/
+    dst: /usr/share/bionic-reader/integrations
+    type: tree
+    file_info:
+      mode: 0644
+  - src: ${CONFIG_EXAMPLE}
+    dst: /usr/share/bionic-reader/config.example.toml
+    file_info:
+      mode: 0644
+  - src: ${COMPLETIONS}/
+    dst: /usr/share/bionic-reader/completions
+    type: tree
+  - src: ${COMPLETIONS}/bionic-reader.bash
+    dst: /usr/share/bash-completion/completions/bionic-reader
+    packager: deb
+  - src: ${COMPLETIONS}/bionic-reader.bash
+    dst: /usr/share/bash-completion/completions/bionic-reader
+    packager: rpm
+  - src: ${COMPLETIONS}/bionic-reader.bash
+    dst: /usr/share/bash-completion/completions/bionic-reader
+    packager: archlinux
+  - src: ${COMPLETIONS}/_bionic-reader
+    dst: /usr/share/zsh/site-functions/_bionic-reader
+    packager: deb
+  - src: ${COMPLETIONS}/_bionic-reader
+    dst: /usr/share/zsh/site-functions/_bionic-reader
+    packager: rpm
+  - src: ${COMPLETIONS}/_bionic-reader
+    dst: /usr/share/zsh/site-functions/_bionic-reader
+    packager: archlinux
+  - src: ${COMPLETIONS}/bionic-reader.fish
+    dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
+    packager: deb
+  - src: ${COMPLETIONS}/bionic-reader.fish
+    dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
+    packager: rpm
+  - src: ${COMPLETIONS}/bionic-reader.fish
+    dst: /usr/share/fish/vendor_completions.d/bionic-reader.fish
+    packager: archlinux
+
+deb:
+  section: utils
+  priority: optional
+
+rpm:
+  group: Applications/Text
+  compression: zstd
+
+archlinux:
+  packager: arturoaviles and contributors

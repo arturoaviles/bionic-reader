@@ -1,6 +1,6 @@
 # Bionic Reader design
 
-Status: specification published as [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1), labelled `ready-for-agent`. This document records agreed product decisions and synthesized implementation defaults; use the published specification as the implementation reference. Implementation has not started.
+Status: specification published as [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1). The Rust CLI, reading sessions, shell adapters, tests, and distribution candidate tooling are implemented. Public distribution remains gated on the release prerequisites below. This document records agreed product decisions and synthesized implementation defaults; use the published specification as the implementation reference.
 
 ## Product
 
@@ -85,4 +85,4 @@ Status: specification published as [GitHub issue #1](https://github.com/arturoav
 
 ## Published specification
 
-The product decisions are confirmed through Q1–Q27. The conversation and design were synthesized into [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1) using `to-spec`, including user stories, implementation decisions, testing decisions, scope boundaries, and release prerequisites. Synthesized buffer/deadline values remain subject to prototype validation. No Rust implementation, package publication, registry reservation, or repository-visibility change has been performed.
+The product decisions are confirmed through Q1–Q27. The conversation and design were synthesized into [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1) using `to-spec`, including user stories, implementation decisions, testing decisions, scope boundaries, and release prerequisites. The implementation exercises the buffer and flush bounds through streaming and PTY tests. Package publication, registry reservation, signing identities, repository hosting, Snap approval, and the source-visibility change remain release work; local candidates do not establish public package availability.
