@@ -259,6 +259,26 @@ fn invalid_reload_keeps_the_last_valid_settings_and_valid_reload_applies_next_co
 
 #[cfg(unix)]
 #[test]
+fn failed_bypass_commands_restore_transformation_for_the_next_command() {
+    let home = tempfile::tempdir().expect("create a temporary session home");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").expect("write the session fixture");
+    let (output, status) = run_session(
+        "/bin/bash",
+        home.path(),
+        b"bionic-reader bypass -- \"$HOME/missing-command\"\nprintf '<STATUS:%s>\\n' \"$?\"\nbionic-reader bypass -- /bin/sh -c 'exit 7'\nprintf '<STATUS:%s>\\n' \"$?\"\nprintf 'reading\\n'\nexit 0\n",
+        None,
+    );
+    assert_eq!(status, 0, "session failed: {}", display(&output));
+    let plain = strip_sgr(&output);
+    assert_contains(&plain, b"could not run bypass command");
+    assert_contains(&plain, b"<STATUS:1>");
+    assert_contains(&plain, b"<STATUS:7>");
+    assert_contains(&output, b"\x1b[1mread\x1b[22ming");
+    assert_no_private_markers(&output);
+}
+
+#[cfg(unix)]
+#[test]
 fn redirected_bypass_keeps_file_bytes_and_restores_the_next_command() {
     let home =
         tempfile::tempdir().expect("create a temporary home directory for this session test");
@@ -474,6 +494,10 @@ fn run_session_with_ctrl_c(shell: &str, home: &Path) -> (Vec<u8>, i32) {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep prompt readiness, signal handling, output closure, and child cleanup in one PTY state machine so its deadlines remain auditable."
+)]
 fn run_session_inner(
     shell: &str,
     home: &Path,
@@ -717,7 +741,8 @@ fn run_session_inner(
     let _ = reader_thread.join();
     let status = child_status
         .expect("the session child should exit before its PTY output closes")
-        .exit_code() as i32;
+        .exit_code();
+    let status = i32::try_from(status).expect("the PTY child exit code fits in i32");
     let restored_lflag = terminal_lflag(terminal_fd);
     let raw_during = during_lflag & (libc::ECHO | libc::ICANON | libc::ISIG) == 0;
     let restored = restored_lflag & (libc::ECHO | libc::ICANON | libc::ISIG)

@@ -1,1 +1,7 @@
 msrv = "1.85.1"
+
+# Upstream dependency graphs require these incompatible major versions:
+# portable-pty/nix versus rustix (bitflags), filedescriptor/thiserror versus
+# Clap/Serde derives (syn), and toml versus toml_parser (winnow).
+# Keep the duplicate-version lint active for every other crate.
+allowed-duplicate-crates = ["bitflags", "syn", "winnow"]

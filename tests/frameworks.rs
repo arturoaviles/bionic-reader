@@ -258,8 +258,13 @@ fn fish_bin_dir() -> Option<PathBuf> {
     fish.parent().map(Path::to_path_buf)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the PTY startup, command exchange, and exit checks together so their shared synchronization state stays visible."
+)]
 fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf>) {
     use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
 
     let pair = portable_pty::native_pty_system()
         .openpty(PtySize {
@@ -309,7 +314,6 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
         ),
     )
     .expect("write framework test wrapper");
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&wrapper, Permissions::from_mode(0o755))
         .expect("make framework test wrapper executable");
     command.env(

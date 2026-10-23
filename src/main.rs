@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process;
 use std::time::{Duration, Instant};
 
+use bionic_reader::Error;
 use bionic_reader::settings::{Overrides, Settings, Style};
 use bionic_reader::transformer::Transformer;
 use bionic_reader::{session, shell};
@@ -78,7 +79,7 @@ enum Commands {
 
 enum Failure {
     Usage(String),
-    Runtime(String),
+    Runtime(Error),
     Io(io::Error),
 }
 
@@ -95,8 +96,9 @@ fn main() {
             eprintln!("bionic-reader: {message}");
             2
         }
-        Err(Failure::Runtime(message)) => {
-            eprintln!("bionic-reader: {message}");
+        Err(Failure::Runtime(error)) if error.io_kind() == Some(io::ErrorKind::BrokenPipe) => 141,
+        Err(Failure::Runtime(error)) => {
+            eprintln!("bionic-reader: {error}");
             1
         }
         Err(Failure::Io(error)) if error.kind() == io::ErrorKind::BrokenPipe => 141,
@@ -150,7 +152,7 @@ fn run() -> Result<i32, Failure> {
             return Ok(0);
         }
         Some(Commands::Init { shell }) => {
-            let code = shell::init(shell).map_err(Failure::Usage)?;
+            let code = shell::init(shell).map_err(|error| Failure::Usage(error.to_string()))?;
             io::stdout().lock().write_all(code.as_bytes())?;
             return Ok(0);
         }
@@ -177,7 +179,8 @@ fn run() -> Result<i32, Failure> {
         style: cli.style,
         exclude_commands: (!cli.exclude.is_empty()).then_some(cli.exclude),
     };
-    let settings = Settings::load(cli.config.as_deref(), &overrides).map_err(Failure::Usage)?;
+    let settings = Settings::load(cli.config.as_deref(), &overrides)
+        .map_err(|error| Failure::Usage(error.to_string()))?;
     if let Some(Commands::Session { shell }) = cli.command {
         return session::run(shell.as_deref(), settings, cli.config, overrides)
             .map_err(Failure::Runtime);
@@ -283,10 +286,11 @@ impl PendingFlushTimer {
     #[must_use]
     fn poll_timeout(&self, now: Instant) -> i32 {
         self.started.map_or(-1, |started| {
-            PARTIAL_WORD_DEADLINE
+            let millis = PARTIAL_WORD_DEADLINE
                 .saturating_sub(now.saturating_duration_since(started))
                 .as_millis()
-                .max(1) as i32
+                .max(1);
+            i32::try_from(millis).unwrap_or(i32::MAX)
         })
     }
 
@@ -310,6 +314,7 @@ mod tests {
     fn a_new_partial_word_after_an_idle_period_gets_a_fresh_deadline() {
         let start = Instant::now();
         let mut timer = PendingFlushTimer::default();
+        let before_deadline = PARTIAL_WORD_DEADLINE.saturating_sub(Duration::from_millis(1));
 
         timer.observe_input(true, false, start);
         let first_flush = start + PARTIAL_WORD_DEADLINE;
@@ -323,9 +328,10 @@ mod tests {
         timer.observe_input(true, false, idle_end);
         assert_eq!(
             timer.poll_timeout(idle_end),
-            PARTIAL_WORD_DEADLINE.as_millis() as i32
+            i32::try_from(PARTIAL_WORD_DEADLINE.as_millis())
+                .expect("the partial-word deadline fits in a poll timeout")
         );
-        assert!(!timer.is_due(idle_end + PARTIAL_WORD_DEADLINE - Duration::from_millis(1)));
+        assert!(!timer.is_due(idle_end + before_deadline));
         assert!(timer.is_due(idle_end + PARTIAL_WORD_DEADLINE));
     }
 
@@ -333,6 +339,7 @@ mod tests {
     fn a_partial_chunk_without_output_preserves_its_deadline() {
         let start = Instant::now();
         let mut timer = PendingFlushTimer::default();
+        let before_deadline = PARTIAL_WORD_DEADLINE.saturating_sub(Duration::from_millis(1));
 
         timer.observe_input(true, false, start);
         let next_chunk = start + Duration::from_millis(10);
@@ -340,9 +347,10 @@ mod tests {
 
         assert_eq!(
             timer.poll_timeout(next_chunk),
-            (PARTIAL_WORD_DEADLINE - Duration::from_millis(10)).as_millis() as i32
+            i32::try_from((PARTIAL_WORD_DEADLINE - Duration::from_millis(10)).as_millis())
+                .expect("the remaining partial-word deadline fits in a poll timeout")
         );
-        assert!(!timer.is_due(start + PARTIAL_WORD_DEADLINE - Duration::from_millis(1)));
+        assert!(!timer.is_due(start + before_deadline));
         assert!(timer.is_due(start + PARTIAL_WORD_DEADLINE));
     }
 
@@ -350,6 +358,7 @@ mod tests {
     fn emitted_output_starts_a_fresh_deadline_for_a_trailing_partial_word() {
         let start = Instant::now();
         let mut timer = PendingFlushTimer::default();
+        let before_deadline = PARTIAL_WORD_DEADLINE.saturating_sub(Duration::from_millis(1));
 
         timer.observe_input(true, false, start);
         let output_emitted = start + Duration::from_millis(10);
@@ -357,9 +366,10 @@ mod tests {
 
         assert_eq!(
             timer.poll_timeout(output_emitted),
-            PARTIAL_WORD_DEADLINE.as_millis() as i32
+            i32::try_from(PARTIAL_WORD_DEADLINE.as_millis())
+                .expect("the partial-word deadline fits in a poll timeout")
         );
-        assert!(!timer.is_due(output_emitted + PARTIAL_WORD_DEADLINE - Duration::from_millis(1)));
+        assert!(!timer.is_due(output_emitted + before_deadline));
         assert!(timer.is_due(output_emitted + PARTIAL_WORD_DEADLINE));
     }
 

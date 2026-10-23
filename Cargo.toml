@@ -15,6 +15,7 @@ include = [
     "README.md",
     "LICENSE",
     "src/**",
+    "benches/**",
     "tests/**",
     "completions/**",
     "integrations/**",
@@ -36,13 +37,52 @@ toml = "0.9"
 unicode-script = "0.5"
 unicode-segmentation = "1.12"
 
+[dev-dependencies]
+divan = "=0.1.21"
+
+[[bench]]
+name = "transformer"
+harness = false
+
 [lints.rust]
+ambiguous_negative_literals = "warn"
 missing_docs = "deny"
 missing_debug_implementations = "deny"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
 unsafe_op_in_unsafe_fn = "deny"
+unused_lifetimes = "warn"
 unused_must_use = "deny"
 
 [lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+too_long_first_doc_paragraph = "warn"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
@@ -56,3 +96,6 @@ missing_panics_doc = "deny"
 [profile.release]
 lto = "thin"
 strip = true
+
+[profile.bench]
+debug = 1

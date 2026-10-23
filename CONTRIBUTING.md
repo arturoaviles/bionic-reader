@@ -2,7 +2,7 @@
 
 Contributions should preserve the product decisions in [docs/design.md](docs/design.md), the vocabulary in [GLOSSARY.md](GLOSSARY.md), and the architecture boundary in [docs/adr/0001-session-wide-terminal-transformation.md](docs/adr/0001-session-wide-terminal-transformation.md).
 
-Rust code follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html). Read [the project's Rust style policy](docs/rust-style.md) for its application to this Cargo CLI, documented exceptions, and automated enforcement.
+Rust code follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html) and [Microsoft's Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html). Read [the project's Rust style policy](docs/rust-style.md) for its application to this Cargo CLI, documented exceptions, and automated enforcement.
 
 ## Development checks
 
@@ -19,6 +19,22 @@ scripts/check-distribution.sh
 ```
 
 The test suite includes unit, CLI, and PTY/session coverage. Session tests need the shells they exercise. Distribution checks require Bash, Zsh, fish, ShellCheck, Node.js, Python 3, Ruff, and mypy. For dependency advisories, install the pinned `cargo-audit` version listed by CI and run `cargo audit` when its advisory database is reachable. A missing tool is a local environment setup issue; CI installs the required checkers explicitly.
+
+## Additional Rust verification and benchmarks
+
+CI pins cargo-hack 0.6.45, cargo-udeps 0.1.61, and nightly-2026-10-22 for the checks that require nightly. The project's source, tests, and benchmarks still support Rust 1.85.1. Reproduce these checks after installing the corresponding tools:
+
+```sh
+cargo +1.85.1 hack check --locked --feature-powerset --all-targets
+cargo +nightly-2026-10-22 udeps --locked --all-targets --all-features
+cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::chunk_boundaries_inside_utf8_and_sgr_do_not_change_output -- --exact
+cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::malformed_bytes_are_preserved_while_surrounding_words_transform -- --exact
+cargo bench --locked --bench transformer
+```
+
+Install Miri and rust-src with `rustup toolchain install nightly-2026-10-22 --profile minimal --component miri --component rust-src`. Install the pinned maintenance tools with `cargo +nightly-2026-10-22 install cargo-hack --version 0.6.45 --locked` and the equivalent command for cargo-udeps 0.1.61. The Miri commands interpret specific pure byte-stream cases; real terminal/process operations remain covered by native integration tests.
+
+The Divan benchmark reports bytes per second and allocations for ASCII, Unicode with existing ANSI styles, punctuation, and passthrough at three chunk sizes. Its profiling allocator applies only to the benchmark executable. Compare changes on the same idle machine with the same compiler and settings; allocation profiling affects timings. CI compiles and smoke-executes all benchmark cases through `cargo test --all-targets`, without enforcing machine-dependent timing thresholds.
 
 ## Build, install, and use checks
 

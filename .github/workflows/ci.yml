@@ -74,6 +74,41 @@ jobs:
       - name: Test offline npm, Yarn PnP, and pnpm installs
         run: scripts/check-node-package-installs.sh target/debug/bionic-reader
 
+  rust-maintenance:
+    name: Rust feature and dependency checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned verification toolchain and tools
+        run: |
+          rustup toolchain install nightly-2026-10-22 --profile minimal
+          cargo +nightly-2026-10-22 install cargo-hack --version 0.6.45 --locked
+          cargo +nightly-2026-10-22 install cargo-udeps --version 0.1.61 --locked
+          rustup toolchain install 1.85.1 --profile minimal
+      - name: Check feature combinations on the minimum compiler
+        run: cargo +1.85.1 hack check --locked --feature-powerset --all-targets
+      - name: Check for unused dependencies
+        run: cargo +nightly-2026-10-22 udeps --locked --all-targets --all-features
+
+  miri:
+    name: Miri byte-stream checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Miri toolchain
+        run: rustup toolchain install nightly-2026-10-22 --profile minimal --component miri --component rust-src
+      - name: Interpret UTF-8 and ANSI boundary regressions
+        # Real PTYs, processes, and signal handling remain covered by native integration tests.
+        run: |
+          cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::chunk_boundaries_inside_utf8_and_sgr_do_not_change_output -- --exact
+          cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::malformed_bytes_are_preserved_while_surrounding_words_transform -- --exact
+
   framework-loader-tests:
     name: Pinned shell-framework loader tests
     runs-on: ubuntu-24.04

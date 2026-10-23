@@ -1,4 +1,19 @@
 //! Interactive PTY reading sessions and per-session controls.
+//!
+//! [`run`] starts a child shell, temporarily changes the caller's terminal mode, and creates a
+//! private control socket. Terminal mode, the child process, temporary files, and workers are
+//! cleaned up when the session ends or startup fails. [`control`] and [`bypass`] use the active
+//! session identified by its environment variables.
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use bionic_reader::session;
+//! use bionic_reader::settings::{Overrides, Settings};
+//!
+//! let status = session::run(Some("/bin/bash"), Settings::default(), None, Overrides::default())?;
+//! # Ok::<(), bionic_reader::Error>(())
+//! ```
 
 use std::collections::HashSet;
 use std::env;
@@ -7,6 +22,7 @@ use std::fs::{self, File, Permissions};
 use std::io::{self, Read, Write};
 use std::mem::{self, MaybeUninit};
 use std::net::Shutdown;
+use std::ops::{Deref, DerefMut};
 use std::os::fd::RawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -17,10 +33,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize};
 use signal_hook::consts::signal;
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
+use crate::Error;
 use crate::settings::{Overrides, Settings, Style};
 use crate::shell;
 use crate::transformer::{self, Transformer};
@@ -30,8 +47,16 @@ use crate::transformer::{self, Transformer};
 // library does not expose safe APIs for these POSIX operations. Each unsafe operation below is
 // confined to a helper or a small call site with a valid descriptor, buffer, or child process ID.
 
+// Bound untrusted shell metadata and stalled partial controls.
 const MARKER_LIMIT: usize = 64 * 1024;
 const PENDING_FLUSH: Duration = Duration::from_millis(50);
+// Short polling keeps shutdown responsive without busy-spinning.
+const WORKER_POLL_MS: i32 = 100;
+const LOOP_POLL: Duration = Duration::from_millis(10);
+// Give the shell a chance to handle TERM/HUP before killing its process groups.
+const TERMINATION_GRACE: Duration = Duration::from_millis(250);
+// A local client must not hold the control worker or its shutdown join indefinitely.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const CONTROL_SOCKET_ENV: &str = "BIONIC_READER_CONTROL_SOCKET";
 const SESSION_ENV: &str = "BIONIC_READER_SESSION";
 const MARKER_TOKEN_ENV: &str = "BIONIC_READER_MARKER_TOKEN";
@@ -42,35 +67,50 @@ const MARKER_TOKEN_ENV: &str = "BIONIC_READER_MARKER_TOKEN";
 ///
 /// Returns an error if the caller is not attached to a terminal, the shell cannot be prepared,
 /// or a required terminal, process, or session-control operation fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "keep PTY ownership, event handling, and teardown order visible together"
+)]
 pub fn run(
     shell: Option<&str>,
     settings: Settings,
     config_path: Option<PathBuf>,
     overrides: Overrides,
-) -> Result<i32, String> {
+) -> Result<i32, Error> {
     use std::io::IsTerminal;
     use std::os::unix::fs::PermissionsExt;
 
+    settings.validate()?;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err("reading sessions require a terminal on both stdin and stdout".to_owned());
+        return Err(Error::new(
+            "reading sessions require a terminal on both stdin and stdout".to_owned(),
+        ));
     }
 
     let (shell_kind, shell_program) = resolve_shell(shell)?;
-    let terminal_mode = TerminalMode::try_new(libc::STDIN_FILENO)
-        .map_err(|error| format!("could not enter terminal raw mode: {error}"))?;
+    let terminal_mode = TerminalMode::try_new(libc::STDIN_FILENO).map_err(|error| {
+        Error::with_source("could not enter terminal raw mode".to_owned(), error)
+    })?;
     let session_temp = tempfile::Builder::new()
         .prefix("bionic-reader-session-")
         .tempdir()
-        .map_err(|error| format!("could not create session directory: {error}"))?;
+        .map_err(|error| {
+            Error::with_source("could not create session directory".to_owned(), error)
+        })?;
     let marker_token = random_token()?;
     let socket_path = session_temp.path().join("control.sock");
-    let listener = UnixListener::bind(&socket_path)
-        .map_err(|error| format!("could not create session control socket: {error}"))?;
-    fs::set_permissions(&socket_path, Permissions::from_mode(0o600))
-        .map_err(|error| format!("could not protect session control socket: {error}"))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("could not configure session control socket: {error}"))?;
+    let listener = UnixListener::bind(&socket_path).map_err(|error| {
+        Error::with_source("could not create session control socket".to_owned(), error)
+    })?;
+    fs::set_permissions(&socket_path, Permissions::from_mode(0o600)).map_err(|error| {
+        Error::with_source("could not protect session control socket".to_owned(), error)
+    })?;
+    listener.set_nonblocking(true).map_err(|error| {
+        Error::with_source(
+            "could not configure session control socket".to_owned(),
+            error,
+        )
+    })?;
 
     let initial_enabled = settings.style != Style::Never;
     let runtime = Arc::new(Mutex::new(RuntimeState {
@@ -80,37 +120,40 @@ pub fn run(
         bypass_tokens: HashSet::new(),
         ended_bypass_tokens: HashSet::new(),
     }));
-    let stop_control = Arc::new(AtomicBool::new(false));
-    let control_thread = spawn_control_server(
-        listener,
-        runtime.clone(),
-        ReloadSource {
-            config_path,
-            overrides,
-        },
-        stop_control.clone(),
-    );
+    let reload_source = ReloadSource {
+        config_path,
+        overrides,
+    };
 
     let integration_path = session_temp
         .path()
         .join(format!("integration.{shell_kind}"));
-    fs::write(&integration_path, shell::init(shell_kind)?)
-        .map_err(|error| format!("could not prepare shell integration: {error}"))?;
+    fs::write(&integration_path, shell::init(shell_kind)?).map_err(|error| {
+        Error::with_source("could not prepare shell integration".to_owned(), error)
+    })?;
 
     let pty_system = portable_pty::native_pty_system();
     let pair = pty_system
         .openpty(current_terminal_size())
-        .map_err(|error| format!("could not create reading-session PTY: {error}"))?;
+        .map_err(|error| {
+            Error::with_source("could not create reading-session PTY".to_owned(), error)
+        })?;
     let master = pair.master;
-    let reader = master
-        .try_clone_reader()
-        .map_err(|error| format!("could not read from the reading-session PTY: {error}"))?;
+    let reader = master.try_clone_reader().map_err(|error| {
+        Error::with_source(
+            "could not read from the reading-session PTY".to_owned(),
+            error,
+        )
+    })?;
     let reader_fd = master
         .as_raw_fd()
-        .ok_or_else(|| "reading-session PTY has no file descriptor".to_owned())?;
-    let writer = master
-        .take_writer()
-        .map_err(|error| format!("could not write to the reading-session PTY: {error}"))?;
+        .ok_or_else(|| Error::new("reading-session PTY has no file descriptor".to_owned()))?;
+    let writer = master.take_writer().map_err(|error| {
+        Error::with_source(
+            "could not write to the reading-session PTY".to_owned(),
+            error,
+        )
+    })?;
 
     let mut command = CommandBuilder::new(&shell_program);
     configure_shell(
@@ -124,50 +167,80 @@ pub fn run(
     command.env(CONTROL_SOCKET_ENV, &socket_path);
     command.env("BIONIC_READER_DISABLE", "0");
 
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|error| format!("could not start {shell_kind} reading session: {error}"))?;
-    drop(pair.slave);
-
     let (output_sender, output_receiver) = mpsc::sync_channel(8);
-    let stop_reader = Arc::new(AtomicBool::new(false));
-    let reader_stop = stop_reader.clone();
-    let reader_thread = thread::spawn(move || {
-        let mut reader = reader;
-        let mut buffer = [0_u8; 8192];
-        while !reader_stop.load(Ordering::Relaxed) {
-            match wait_for_descriptor(reader_fd, 100) {
-                Ok(false) => continue,
-                Ok(true) => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                    continue;
+    let mut workers = Workers::new(output_receiver);
+    let child = pair.slave.spawn_command(command).map_err(|error| {
+        Error::with_source(
+            format!("could not start {shell_kind} reading session"),
+            error,
+        )
+    })?;
+    drop(pair.slave);
+    let mut child = ChildCleanup {
+        child,
+        master: master.as_ref(),
+    };
+    let control_thread = spawn_control_server(
+        listener,
+        Arc::clone(&runtime),
+        reload_source,
+        Arc::clone(&workers.stop),
+    )
+    .map_err(|error| {
+        Error::with_source("could not start session control worker".to_owned(), error)
+    })?;
+    workers.threads.push(control_thread);
+
+    let reader_stop = Arc::clone(&workers.stop);
+    let reader_thread = thread::Builder::new()
+        .name("bionic-output".to_owned())
+        .spawn(move || {
+            let mut reader = reader;
+            let mut buffer = [0_u8; 8192];
+            while !reader_stop.load(Ordering::Relaxed) {
+                match wait_for_descriptor(reader_fd, WORKER_POLL_MS) {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                        continue;
+                    }
+                    Err(_) => break,
                 }
-                Err(_) => break,
-            }
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(count) => {
-                    if output_sender
-                        .send(OutputEvent::Bytes(buffer[..count].to_vec()))
-                        .is_err()
-                    {
-                        break;
+                match reader.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        if output_sender
+                            .send(OutputEvent::Bytes(buffer[..count].to_vec()))
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             }
-        }
-        let _ = output_sender.send(OutputEvent::Closed);
-    });
+            let _ = output_sender.send(OutputEvent::Closed);
+        })
+        .map_err(|error| {
+            Error::with_source("could not start session output worker".to_owned(), error)
+        })?;
+    workers.threads.push(reader_thread);
 
-    let stop_input = Arc::new(AtomicBool::new(false));
-    let input_thread = spawn_input_pump(writer, stop_input.clone());
+    let input_thread = spawn_input_pump(writer, Arc::clone(&workers.stop)).map_err(|error| {
+        Error::with_source("could not start session input worker".to_owned(), error)
+    })?;
+    workers.threads.push(input_thread);
     let (signal_sender, signal_receiver) = mpsc::channel();
-    let (signal_handle, signal_thread) = spawn_signal_pump(signal_sender)
-        .map_err(|error| format!("could not install session signal handlers: {error}"))?;
+    let (signal_handle, signal_thread) = spawn_signal_pump(signal_sender).map_err(|error| {
+        Error::with_source(
+            "could not install session signal handlers".to_owned(),
+            error,
+        )
+    })?;
+    workers.signal_handle = Some(signal_handle);
+    workers.threads.push(signal_thread);
 
     let mut parser = MarkerParser::new(&marker_token);
-    let mut output_state = OutputState::new(runtime.clone());
+    let mut output_state = OutputState::new(Arc::clone(&runtime));
     let mut output = io::stdout().lock();
     let mut child_status = None;
     let mut output_closed = false;
@@ -180,7 +253,10 @@ pub fn run(
         for signal in signal_receiver.try_iter() {
             if signal == signal::SIGWINCH {
                 if let Err(error) = master.resize(current_terminal_size()) {
-                    loop_error = Some(format!("could not resize reading-session PTY: {error}"));
+                    loop_error = Some(Error::with_source(
+                        "could not resize reading-session PTY".to_owned(),
+                        error,
+                    ));
                     break;
                 }
             } else {
@@ -188,10 +264,9 @@ pub fn run(
                 if signal == signal::SIGTERM || signal == signal::SIGHUP {
                     termination_signal.get_or_insert(signal);
                     if let Some(pid) = child.process_id() {
-                        signal_process_group(pid as libc::pid_t, signal);
+                        signal_process_group(process_id(pid), signal);
                     }
-                    shutdown_deadline
-                        .get_or_insert_with(|| Instant::now() + Duration::from_millis(250));
+                    shutdown_deadline.get_or_insert_with(|| Instant::now() + TERMINATION_GRACE);
                 }
             }
         }
@@ -200,12 +275,14 @@ pub fn run(
             break;
         }
 
-        match output_receiver.recv_timeout(Duration::from_millis(10)) {
+        match workers.receive(LOOP_POLL) {
             Ok(OutputEvent::Bytes(bytes)) => {
                 for event in parser.push(&bytes) {
                     if let Err(error) = output_state.process(event, &mut output) {
-                        loop_error =
-                            Some(format!("could not write reading-session output: {error}"));
+                        loop_error = Some(Error::with_source(
+                            "could not write reading-session output".to_owned(),
+                            error,
+                        ));
                         let _ = child.kill();
                         break;
                     }
@@ -214,16 +291,20 @@ pub fn run(
                     break;
                 }
             }
-            Ok(OutputEvent::Closed) => output_closed = true,
+            Ok(OutputEvent::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                output_closed = true;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => output_closed = true,
         }
 
         if child_status.is_none() {
             match child.try_wait() {
                 Ok(status) => child_status = status,
                 Err(error) => {
-                    loop_error = Some(format!("could not wait for reading session: {error}"));
+                    loop_error = Some(Error::with_source(
+                        "could not wait for reading session".to_owned(),
+                        error,
+                    ));
                     let _ = child.kill();
                     break;
                 }
@@ -242,7 +323,10 @@ pub fn run(
 
         for event in parser.flush_pending() {
             if let Err(error) = output_state.process(event, &mut output) {
-                loop_error = Some(format!("could not flush partial terminal control: {error}"));
+                loop_error = Some(Error::with_source(
+                    "could not flush partial terminal control".to_owned(),
+                    error,
+                ));
                 let _ = child.kill();
                 break;
             }
@@ -251,7 +335,10 @@ pub fn run(
             break;
         }
         if let Err(error) = output_state.flush_pending(&mut output) {
-            loop_error = Some(format!("could not flush reading-session output: {error}"));
+            loop_error = Some(Error::with_source(
+                "could not flush reading-session output".to_owned(),
+                error,
+            ));
             let _ = child.kill();
             break;
         }
@@ -259,7 +346,10 @@ pub fn run(
         // end their output with a newline. Rust's stdout line buffer must be
         // flushed at each PTY batch so the terminal can display them now.
         if let Err(error) = output.flush() {
-            loop_error = Some(format!("could not flush terminal output: {error}"));
+            loop_error = Some(Error::with_source(
+                "could not flush terminal output".to_owned(),
+                error,
+            ));
             break;
         }
     }
@@ -274,15 +364,7 @@ pub fn run(
         }
     }
 
-    stop_input.store(true, Ordering::Relaxed);
-    stop_control.store(true, Ordering::Relaxed);
-    signal_handle.close();
-    let _ = input_thread.join();
-    stop_reader.store(true, Ordering::Relaxed);
-    drop(output_receiver);
-    let _ = reader_thread.join();
-    let _ = control_thread.join();
-    let _ = signal_thread.join();
+    drop(workers);
 
     if let Some(error) = loop_error {
         drop(output);
@@ -290,23 +372,21 @@ pub fn run(
         return Err(error);
     }
     for event in parser.finish() {
-        output_state
-            .process(event, &mut output)
-            .map_err(|error| format!("could not finish reading-session output: {error}"))?;
+        output_state.process(event, &mut output).map_err(|error| {
+            Error::with_source("could not finish reading-session output".to_owned(), error)
+        })?;
     }
-    output_state
-        .finish(&mut output)
-        .map_err(|error| format!("could not finish reading-session output: {error}"))?;
+    output_state.finish(&mut output).map_err(|error| {
+        Error::with_source("could not finish reading-session output".to_owned(), error)
+    })?;
     output
         .flush()
-        .map_err(|error| format!("could not flush terminal output: {error}"))?;
+        .map_err(|error| Error::with_source("could not flush terminal output".to_owned(), error))?;
     drop(output);
     drop(terminal_mode);
 
     let status = child_status.unwrap_or_else(|| ExitStatus::with_exit_code(1));
-    Ok(termination_signal
-        .map(signal_exit_code)
-        .unwrap_or_else(|| pty_exit_code(&status)))
+    Ok(termination_signal.map_or_else(|| pty_exit_code(&status), signal_exit_code))
 }
 
 /// Change the active reading-session control state.
@@ -315,14 +395,22 @@ pub fn run(
 ///
 /// Returns an error for an unsupported control command, when no reading session is active, or
 /// when the active session rejects or cannot receive the request.
-pub fn control(command: &str) -> Result<(), String> {
+pub fn control(command: &str) -> Result<(), Error> {
     match command {
         "on" | "off" | "toggle" | "reload" => {}
-        _ => return Err(format!("unknown reading-session control `{command}`")),
+        _ => {
+            return Err(Error::new(format!(
+                "unknown reading-session control `{command}`"
+            )));
+        }
     }
     let socket = env::var_os(CONTROL_SOCKET_ENV)
         .map(PathBuf::from)
-        .ok_or_else(|| format!("`bionic-reader {command}` requires an active reading session"))?;
+        .ok_or_else(|| {
+            Error::new(format!(
+                "`bionic-reader {command}` requires an active reading session"
+            ))
+        })?;
     send_control_request(&socket, command)
 }
 
@@ -332,38 +420,49 @@ pub fn control(command: &str) -> Result<(), String> {
 ///
 /// Returns an error if the command is missing, no reading session is active, or the bypass
 /// command or its session-control request cannot be started.
-pub fn bypass(command: &[OsString]) -> Result<i32, String> {
-    use std::io::IsTerminal;
-
+pub fn bypass(command: &[OsString]) -> Result<i32, Error> {
     let Some(program) = command.first() else {
-        return Err("usage: bionic-reader bypass -- <command> [args ...]".to_owned());
+        return Err(Error::new(
+            "usage: bionic-reader bypass -- <command> [args ...]".to_owned(),
+        ));
     };
     if env::var_os(SESSION_ENV).as_deref() != Some(OsStr::new("1")) {
-        return Err("`bionic-reader bypass` requires an active reading session".to_owned());
+        return Err(Error::new(
+            "`bionic-reader bypass` requires an active reading session".to_owned(),
+        ));
     }
-    let marker_token = env::var(MARKER_TOKEN_ENV)
-        .map_err(|_| "the active reading session has no marker token".to_owned())?;
+    let marker_token = env::var(MARKER_TOKEN_ENV).map_err(|error| {
+        Error::with_source_hidden(
+            "the active reading session has no marker token".to_owned(),
+            error,
+        )
+    })?;
     let bypass_id = random_token()?;
     let socket = env::var_os(CONTROL_SOCKET_ENV)
         .map(PathBuf::from)
-        .ok_or_else(|| "the active reading session has no control socket".to_owned())?;
-    send_control_request(&socket, &format!("bypass-start:{bypass_id}"))?;
-    let terminal_marker = io::stdout().is_terminal();
-    if terminal_marker {
-        write_marker(&dcs_marker(&marker_token, &format!("BYPASS+{bypass_id}")))
-            .map_err(|error| format!("could not start bypass: {error}"))?;
-    }
-
+        .ok_or_else(|| Error::new("the active reading session has no control socket".to_owned()))?;
     let mut marker_guard = BypassMarkerGuard {
         socket,
         token: bypass_id,
         marker_token,
-        terminal_marker,
+        terminal_marker: false,
         active: true,
     };
-    let status = run_bypass_command(program, &command[1..]);
-    marker_guard.finish();
-    status
+    // Own rollback before activation: a lost acknowledgment can follow a successful start.
+    let status = marker_guard
+        .start()
+        .and_then(|()| run_bypass_command(program, &command[1..]));
+    complete_bypass(status, marker_guard.finish())
+}
+
+fn complete_bypass(status: Result<i32, Error>, cleanup: Result<(), Error>) -> Result<i32, Error> {
+    match (status, cleanup) {
+        (Err(error), Err(cleanup)) => {
+            Err(error.context(format!("bypass cleanup also failed ({cleanup:#})")))
+        }
+        (result, Ok(())) => result,
+        (Ok(_), Err(error)) => Err(error),
+    }
 }
 
 fn write_marker(marker: &[u8]) -> io::Result<()> {
@@ -381,57 +480,99 @@ struct BypassMarkerGuard {
 }
 
 impl BypassMarkerGuard {
-    fn finish(&mut self) {
-        if self.active {
-            if self.terminal_marker {
-                let marker = dcs_marker(&self.marker_token, &format!("BYPASS-{}", self.token));
-                let _ = write_marker(&marker);
-            }
-            let _ = send_control_request(&self.socket, &format!("bypass-end:{}", self.token));
-            self.active = false;
+    fn start(&mut self) -> Result<(), Error> {
+        use std::io::IsTerminal;
+
+        send_control_request(&self.socket, &format!("bypass-start:{}", self.token))?;
+        if io::stdout().is_terminal() {
+            // A partial write also needs an end-marker attempt during cleanup.
+            self.terminal_marker = true;
+            write_marker(&dcs_marker(
+                &self.marker_token,
+                &format!("BYPASS+{}", self.token),
+            ))
+            .map_err(|error| Error::with_source("could not start bypass".to_owned(), error))?;
         }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), Error> {
+        if !self.active {
+            return Ok(());
+        }
+        let marker_result = if self.terminal_marker {
+            let marker = dcs_marker(&self.marker_token, &format!("BYPASS-{}", self.token));
+            write_marker(&marker)
+                .map_err(|error| Error::with_source("could not finish bypass".to_owned(), error))
+        } else {
+            Ok(())
+        };
+        // Always restore control state, even when writing the terminal marker failed.
+        send_control_request(&self.socket, &format!("bypass-end:{}", self.token))?;
+        self.active = false;
+        marker_result
     }
 }
 
 impl Drop for BypassMarkerGuard {
     fn drop(&mut self) {
-        self.finish();
+        // Explicit completion reports errors; unwinding can only attempt best-effort cleanup.
+        let _ = self.finish();
     }
 }
 
-fn run_bypass_command(program: &OsStr, arguments: &[OsString]) -> Result<i32, String> {
+fn run_bypass_command(program: &OsStr, arguments: &[OsString]) -> Result<i32, Error> {
     let mut signals = Signals::new([
         signal::SIGINT,
         signal::SIGHUP,
         signal::SIGQUIT,
         signal::SIGTERM,
     ])
-    .map_err(|error| format!("could not install bypass signal handlers: {error}"))?;
+    .map_err(|error| {
+        Error::with_source("could not install bypass signal handlers".to_owned(), error)
+    })?;
     let signal_handle = signals.handle();
-    let (signal_sender, signal_receiver) = mpsc::channel();
-    let signal_thread = thread::spawn(move || {
-        for signal in signals.forever() {
-            if signal_sender.send(signal).is_err() {
-                break;
-            }
-        }
-    });
     let mut child = Command::new(program)
         .args(arguments)
         .spawn()
-        .map_err(|error| format!("could not run bypass command: {error}"))?;
+        .map_err(|error| Error::with_source("could not run bypass command".to_owned(), error))?;
+    let (signal_sender, signal_receiver) = mpsc::channel();
+    let signal_thread = match thread::Builder::new()
+        .name("bionic-bypass-signals".to_owned())
+        .spawn(move || {
+            for signal in signals.forever() {
+                if signal_sender.send(signal).is_err() {
+                    break;
+                }
+            }
+        }) {
+        Ok(worker) => worker,
+        Err(error) => {
+            signal_handle.close();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::with_source(
+                "could not start bypass signal worker".to_owned(),
+                error,
+            ));
+        }
+    };
     let status = loop {
         for signal in signal_receiver.try_iter() {
-            signal_process(child.id() as libc::pid_t, signal);
+            signal_process(process_id(child.id()), signal);
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => thread::sleep(LOOP_POLL),
             Err(error) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 signal_handle.close();
                 let _ = signal_thread.join();
-                return Err(format!("could not wait for bypass command: {error}"));
+                return Err(Error::with_source(
+                    "could not wait for bypass command".to_owned(),
+                    error,
+                ));
             }
         }
     };
@@ -440,27 +581,42 @@ fn run_bypass_command(program: &OsStr, arguments: &[OsString]) -> Result<i32, St
     Ok(process_exit_code(status))
 }
 
-fn send_control_request(socket: &Path, request: &str) -> Result<(), String> {
-    let mut stream = UnixStream::connect(socket)
-        .map_err(|error| format!("could not reach the active reading session: {error}"))?;
+fn send_control_request(socket: &Path, request: &str) -> Result<(), Error> {
+    let mut stream = UnixStream::connect(socket).map_err(|error| {
+        Error::with_source(
+            "could not reach the active reading session".to_owned(),
+            error,
+        )
+    })?;
+    set_control_timeout(&stream).map_err(|error| {
+        Error::with_source(
+            "could not configure session control timeout".to_owned(),
+            error,
+        )
+    })?;
     stream
         .write_all(request.as_bytes())
-        .map_err(|error| format!("could not send session control: {error}"))?;
-    stream
-        .shutdown(Shutdown::Write)
-        .map_err(|error| format!("could not finish session control request: {error}"))?;
+        .map_err(|error| Error::with_source("could not send session control".to_owned(), error))?;
+    stream.shutdown(Shutdown::Write).map_err(|error| {
+        Error::with_source("could not finish session control request".to_owned(), error)
+    })?;
     let mut response = String::new();
     stream
+        .take(64 * 1024)
         .read_to_string(&mut response)
-        .map_err(|error| format!("could not read session control response: {error}"))?;
+        .map_err(|error| {
+            Error::with_source("could not read session control response".to_owned(), error)
+        })?;
     if response.starts_with("ok") {
         Ok(())
     } else {
-        Err(response
-            .strip_prefix("error:")
-            .unwrap_or("reading session rejected the control request")
-            .trim()
-            .to_owned())
+        Err(Error::new(
+            response
+                .strip_prefix("error:")
+                .unwrap_or("reading session rejected the control request")
+                .trim()
+                .to_owned(),
+        ))
     }
 }
 
@@ -470,7 +626,7 @@ fn process_exit_code(status: ProcessExitStatus) -> i32 {
 
     status
         .code()
-        .unwrap_or_else(|| status.signal().map(|signal| 128 + signal).unwrap_or(1))
+        .unwrap_or_else(|| status.signal().map_or(1, |signal| 128 + signal))
 }
 
 #[must_use]
@@ -481,10 +637,10 @@ fn pty_exit_code(status: &ExitStatus) -> i32 {
             "Interrupt" => 130,
             "Quit" => 131,
             "Terminated" => 143,
-            _ => status.exit_code() as i32,
+            _ => i32::try_from(status.exit_code()).unwrap_or(1),
         }
     } else {
-        status.exit_code() as i32
+        i32::try_from(status.exit_code()).unwrap_or(1)
     }
 }
 
@@ -502,10 +658,20 @@ fn signal_exit_code(signal: i32) -> i32 {
 fn forward_to_foreground_group(master: &dyn MasterPty, fallback_pid: Option<u32>, signal: i32) {
     let group = master
         .process_group_leader()
-        .or_else(|| fallback_pid.map(|pid| pid as libc::pid_t));
+        .or_else(|| fallback_pid.map(process_id));
     if let Some(group) = group {
         signal_process_group(group, signal);
     }
+}
+
+fn set_control_timeout(stream: &UnixStream) -> io::Result<()> {
+    stream.set_read_timeout(Some(CONTROL_TIMEOUT))?;
+    stream.set_write_timeout(Some(CONTROL_TIMEOUT))
+}
+
+#[must_use]
+fn process_id(pid: u32) -> libc::pid_t {
+    libc::pid_t::try_from(pid).expect("a live POSIX child PID fits in pid_t")
 }
 
 fn signal_process_group(group: libc::pid_t, signal: i32) {
@@ -525,11 +691,11 @@ fn signal_process(process_id: libc::pid_t, signal: i32) {
 
 fn kill_session_groups(master: &dyn MasterPty, shell_pid: u32) {
     if let Some(foreground) = master.process_group_leader() {
-        if foreground != shell_pid as libc::pid_t {
+        if foreground != process_id(shell_pid) {
             signal_process_group(foreground, signal::SIGKILL);
         }
     }
-    signal_process_group(shell_pid as libc::pid_t, signal::SIGKILL);
+    signal_process_group(process_id(shell_pid), signal::SIGKILL);
 }
 
 struct RuntimeState {
@@ -546,7 +712,7 @@ struct ReloadSource {
 }
 
 impl ReloadSource {
-    fn load(&self) -> Result<Settings, String> {
+    fn load(&self) -> Result<Settings, Error> {
         Settings::load(self.config_path.as_deref(), &self.overrides)
     }
 }
@@ -556,12 +722,19 @@ fn spawn_control_server(
     state: Arc<Mutex<RuntimeState>>,
     reload_source: ReloadSource,
     stop: Arc<AtomicBool>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
+) -> io::Result<JoinHandle<()>> {
+    thread::Builder::new().spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let result = handle_control_request(&mut stream, &state, &reload_source);
+                    let result = set_control_timeout(&stream)
+                        .map_err(|error| {
+                            Error::with_source(
+                                "could not configure session control timeout".to_owned(),
+                                error,
+                            )
+                        })
+                        .and_then(|()| handle_control_request(&mut stream, &state, &reload_source));
                     let response = match result {
                         Ok(()) => "ok\n".to_owned(),
                         Err(error) => format!("error:{error}\n"),
@@ -569,7 +742,7 @@ fn spawn_control_server(
                     let _ = stream.write_all(response.as_bytes());
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
+                    thread::sleep(LOOP_POLL);
                 }
                 Err(_) => break,
             }
@@ -581,16 +754,27 @@ fn handle_control_request(
     stream: &mut UnixStream,
     state: &Mutex<RuntimeState>,
     reload_source: &ReloadSource,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut request = String::new();
     stream
         .take(64)
         .read_to_string(&mut request)
-        .map_err(|error| format!("could not read control request: {error}"))?;
+        .map_err(|error| Error::with_source("could not read control request".to_owned(), error))?;
     let request = request.trim();
+    // Disk I/O and TOML parsing must not hold the lock used by terminal output.
+    let refreshed = (request == "reload")
+        .then(|| reload_source.load())
+        .transpose()?;
     let mut state = state
         .lock()
-        .map_err(|_| "session control state is unavailable".to_owned())?;
+        .map_err(|_poisoned| Error::new("session control state is unavailable".to_owned()))?;
+    if let Some(refreshed) = refreshed {
+        state.settings = refreshed;
+        if state.enabled_override.is_none() {
+            state.enabled = state.settings.style != Style::Never;
+        }
+        return Ok(());
+    }
     match request {
         "on" => {
             state.enabled = true;
@@ -604,30 +788,23 @@ fn handle_control_request(
             state.enabled = !state.enabled;
             state.enabled_override = Some(state.enabled);
         }
-        "reload" => {
-            let refreshed = reload_source.load()?;
-            state.settings = refreshed;
-            if state.enabled_override.is_none() {
-                state.enabled = state.settings.style != Style::Never;
-            }
-        }
         request if request.starts_with("bypass-start:") => {
             let token = &request["bypass-start:".len()..];
             if !is_marker_id(token.as_bytes()) {
-                return Err("invalid bypass token".to_owned());
+                return Err(Error::new("invalid bypass token".to_owned()));
             }
             state.bypass_tokens.insert(token.to_owned());
         }
         request if request.starts_with("bypass-end:") => {
             let token = &request["bypass-end:".len()..];
             if !is_marker_id(token.as_bytes()) {
-                return Err("invalid bypass token".to_owned());
+                return Err(Error::new("invalid bypass token".to_owned()));
             }
             if state.bypass_tokens.contains(token) {
                 state.ended_bypass_tokens.insert(token.to_owned());
             }
         }
-        _ => return Err("invalid session control request".to_owned()),
+        _ => return Err(Error::new("invalid session control request".to_owned())),
     }
     Ok(())
 }
@@ -636,6 +813,78 @@ fn handle_control_request(
 enum OutputEvent {
     Bytes(Vec<u8>),
     Closed,
+}
+
+// Owns the receiving end so a blocked bounded-channel send is released before joining.
+struct Workers {
+    stop: Arc<AtomicBool>,
+    signal_handle: Option<SignalHandle>,
+    threads: Vec<JoinHandle<()>>,
+    receiver: Option<mpsc::Receiver<OutputEvent>>,
+}
+
+impl Workers {
+    #[must_use]
+    fn new(receiver: mpsc::Receiver<OutputEvent>) -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(false)),
+            signal_handle: None,
+            threads: Vec::with_capacity(4),
+            receiver: Some(receiver),
+        }
+    }
+
+    fn receive(&self, timeout: Duration) -> Result<OutputEvent, mpsc::RecvTimeoutError> {
+        self.receiver
+            .as_ref()
+            .expect("the output receiver exists until worker teardown")
+            .recv_timeout(timeout)
+    }
+}
+
+impl Drop for Workers {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = &self.signal_handle {
+            handle.close();
+        }
+        drop(self.receiver.take());
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+// Created after Workers, so a failed startup kills/reaps the child before joining workers.
+struct ChildCleanup<'pty> {
+    child: Box<dyn Child + Send + Sync>,
+    master: &'pty dyn MasterPty,
+}
+
+impl Deref for ChildCleanup<'_> {
+    type Target = dyn Child + Send + Sync;
+
+    fn deref(&self) -> &Self::Target {
+        self.child.as_ref()
+    }
+}
+
+impl DerefMut for ChildCleanup<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.child.as_mut()
+    }
+}
+
+impl Drop for ChildCleanup<'_> {
+    fn drop(&mut self) {
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            if let Some(pid) = self.child.process_id() {
+                kill_session_groups(self.master, pid);
+            }
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 fn wait_for_descriptor(fd: RawFd, timeout_ms: i32) -> io::Result<bool> {
@@ -660,15 +909,18 @@ fn read_descriptor(fd: RawFd, buffer: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::last_os_error())
     } else {
         // POSIX `read` never reports more bytes than the buffer length on success.
-        Ok(count as usize)
+        Ok(usize::try_from(count).expect("a successful POSIX read returns a nonnegative count"))
     }
 }
 
-fn spawn_input_pump(mut writer: Box<dyn Write + Send>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
-    thread::spawn(move || {
+fn spawn_input_pump(
+    mut writer: Box<dyn Write + Send>,
+    stop: Arc<AtomicBool>,
+) -> io::Result<JoinHandle<()>> {
+    thread::Builder::new().spawn(move || {
         let mut buffer = [0_u8; 4096];
         while !stop.load(Ordering::Relaxed) {
-            match wait_for_descriptor(libc::STDIN_FILENO, 100) {
+            match wait_for_descriptor(libc::STDIN_FILENO, WORKER_POLL_MS) {
                 Ok(false) => continue,
                 Ok(true) => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {
@@ -676,9 +928,8 @@ fn spawn_input_pump(mut writer: Box<dyn Write + Send>, stop: Arc<AtomicBool>) ->
                 }
                 Err(_) => break,
             }
-            let count = match read_descriptor(libc::STDIN_FILENO, &mut buffer) {
-                Ok(count) => count,
-                Err(_) => break,
+            let Ok(count) = read_descriptor(libc::STDIN_FILENO, &mut buffer) else {
+                break;
             };
             if count == 0 {
                 break;
@@ -699,13 +950,15 @@ fn spawn_signal_pump(sender: mpsc::Sender<i32>) -> io::Result<(SignalHandle, Joi
         signal::SIGTERM,
     ])?;
     let handle = signals.handle();
-    let thread = thread::spawn(move || {
-        for signal in signals.forever() {
-            if sender.send(signal).is_err() {
-                break;
+    let thread = thread::Builder::new()
+        .spawn(move || {
+            for signal in signals.forever() {
+                if sender.send(signal).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        })
+        .inspect_err(|_error| handle.close())?;
     Ok((handle, thread))
 }
 
@@ -747,13 +1000,7 @@ impl Drop for TerminalMode {
 fn current_terminal_size() -> PtySize {
     let mut size: MaybeUninit<libc::winsize> = MaybeUninit::zeroed();
     // SAFETY: size is a valid winsize output buffer for TIOCGWINSZ.
-    let result = unsafe {
-        libc::ioctl(
-            libc::STDOUT_FILENO,
-            libc::TIOCGWINSZ as _,
-            size.as_mut_ptr(),
-        )
-    };
+    let result = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
     if result == 0 {
         // SAFETY: ioctl succeeded and initialized winsize.
         let size = unsafe { size.assume_init() };
@@ -773,14 +1020,15 @@ fn current_terminal_size() -> PtySize {
     }
 }
 
-fn random_token() -> Result<String, String> {
-    let mut bytes = [0_u8; 16];
-    let mut random = File::open("/dev/urandom")
-        .map_err(|error| format!("could not access system randomness: {error}"))?;
-    random
-        .read_exact(&mut bytes)
-        .map_err(|error| format!("could not create a session token: {error}"))?;
+fn random_token() -> Result<String, Error> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut bytes = [0_u8; 16];
+    let mut random = File::open("/dev/urandom").map_err(|error| {
+        Error::with_source("could not access system randomness".to_owned(), error)
+    })?;
+    random.read_exact(&mut bytes).map_err(|error| {
+        Error::with_source("could not create a session token".to_owned(), error)
+    })?;
     let mut token = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         token.push(char::from(HEX[usize::from(byte >> 4)]));
@@ -789,7 +1037,7 @@ fn random_token() -> Result<String, String> {
     Ok(token)
 }
 
-fn resolve_shell(shell: Option<&str>) -> Result<(&'static str, OsString), String> {
+fn resolve_shell(shell: Option<&str>) -> Result<(&'static str, OsString), Error> {
     let requested = shell
         .map(OsString::from)
         .or_else(|| env::var_os("SHELL"))
@@ -804,29 +1052,30 @@ fn configure_shell(
     shell_kind: &str,
     integration_path: &Path,
     temp_dir: &Path,
-) -> Result<(), String> {
-    let integration_path = integration_path
-        .to_str()
-        .ok_or_else(|| "temporary shell integration path is not valid UTF-8".to_owned())?;
+) -> Result<(), Error> {
+    let integration_path = integration_path.to_str().ok_or_else(|| {
+        Error::new("temporary shell integration path is not valid UTF-8".to_owned())
+    })?;
     let temp_dir = temp_dir
         .to_str()
-        .ok_or_else(|| "temporary session path is not valid UTF-8".to_owned())?;
+        .ok_or_else(|| Error::new("temporary session path is not valid UTF-8".to_owned()))?;
     command.env("BIONIC_READER_INTEGRATION", integration_path);
     match shell_kind {
         "bash" => {
             let user_rc = env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."))
+                .map_or_else(|| PathBuf::from("."), PathBuf::from)
                 .join(".bashrc");
             command.env("BIONIC_READER_USER_RC", user_rc);
             let rc_path = Path::new(temp_dir).join("bashrc");
-            let integration = fs::read_to_string(integration_path)
-                .map_err(|error| format!("could not read Bash integration: {error}"))?;
+            let integration = fs::read_to_string(integration_path).map_err(|error| {
+                Error::with_source("could not read Bash integration".to_owned(), error)
+            })?;
             let startup = format!(
                 "if [[ -r ${{BIONIC_READER_USER_RC-}} ]]; then source \"$BIONIC_READER_USER_RC\"; fi\n{integration}"
             );
-            fs::write(&rc_path, startup)
-                .map_err(|error| format!("could not prepare Bash startup: {error}"))?;
+            fs::write(&rc_path, startup).map_err(|error| {
+                Error::with_source("could not prepare Bash startup".to_owned(), error)
+            })?;
             command.args(["--noprofile", "--rcfile"]);
             command.arg(rc_path);
             command.arg("-i");
@@ -844,12 +1093,12 @@ fn configure_shell(
             command.args(["--interactive", "--init-command"]);
             command.arg("source \"$BIONIC_READER_INTEGRATION\"");
         }
-        _ => return Err(format!("unsupported shell `{shell_kind}`")),
+        _ => return Err(Error::new(format!("unsupported shell `{shell_kind}`"))),
     }
     Ok(())
 }
 
-fn write_zsh_startup(temp_dir: &str) -> Result<(), String> {
+fn write_zsh_startup(temp_dir: &str) -> Result<(), Error> {
     for file in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
         let variable = file.trim_start_matches('.').replace('.', "_");
         let mut script = format!(
@@ -873,8 +1122,9 @@ fn write_zsh_startup(temp_dir: &str) -> Result<(), String> {
             );
         }
         let path = Path::new(temp_dir).join(file);
-        fs::write(path, script)
-            .map_err(|error| format!("could not prepare Zsh startup: {error}"))?;
+        fs::write(path, script).map_err(|error| {
+            Error::with_source("could not prepare Zsh startup".to_owned(), error)
+        })?;
     }
     Ok(())
 }
@@ -1073,7 +1323,10 @@ impl OutputState {
             ParsedEvent::Marker(Marker::Begin(metadata)) => self.begin(&metadata, output),
             ParsedEvent::Marker(Marker::End) => self.end(output),
             ParsedEvent::Marker(Marker::BypassPush(token)) => self.bypass_push(token, output),
-            ParsedEvent::Marker(Marker::BypassPop(token)) => self.bypass_pop(&token, output),
+            ParsedEvent::Marker(Marker::BypassPop(_token)) => {
+                // Retain bypass until the trusted shell END, including downstream pipeline output.
+                Ok(())
+            }
             ParsedEvent::Marker(Marker::UnsafeDcs(bytes)) => {
                 if self.in_command {
                     self.flush_transformer(output)?;
@@ -1093,7 +1346,7 @@ impl OutputState {
         let runtime = self
             .runtime
             .lock()
-            .map_err(|_| io::Error::other("reading-session runtime state was poisoned"))?;
+            .map_err(|_poisoned| io::Error::other("reading-session runtime state was poisoned"))?;
         let command_allowed = !command_is_excluded(metadata, &runtime.settings);
         self.in_command = true;
         self.unsafe_interval = false;
@@ -1126,14 +1379,6 @@ impl OutputState {
             self.transforming = false;
             self.transformer = None;
         }
-        Ok(())
-    }
-
-    fn bypass_pop(&mut self, token: &str, _output: &mut impl Write) -> io::Result<()> {
-        // Keep bypass active until the trusted shell END marker. This also
-        // covers data emitted by the rest of a pipeline after the bypassed
-        // process itself has exited.
-        let _ = token;
         Ok(())
     }
 
@@ -1193,7 +1438,7 @@ impl OutputState {
         let current = self
             .runtime
             .lock()
-            .map_err(|_| io::Error::other("reading-session runtime state was poisoned"))?
+            .map_err(|_poisoned| io::Error::other("reading-session runtime state was poisoned"))?
             .bypass_tokens
             .clone();
         let was_empty = self.bypass_tokens.is_empty();
@@ -1213,7 +1458,7 @@ fn retire_ended_bypass(
     let ended = {
         let mut state = runtime
             .lock()
-            .map_err(|_| io::Error::other("reading-session runtime state was poisoned"))?;
+            .map_err(|_poisoned| io::Error::other("reading-session runtime state was poisoned"))?;
         let ended = mem::take(&mut state.ended_bypass_tokens);
         for token in &ended {
             state.bypass_tokens.remove(token);
@@ -1245,9 +1490,8 @@ fn command_is_excluded(metadata: &[u8], settings: &Settings) -> bool {
             Err(_) => return true,
         },
     };
-    let words = match shell_words::split(&command_line) {
-        Ok(words) => words,
-        Err(_) => return true,
+    let Ok(words) = shell_words::split(&command_line) else {
+        return true;
     };
     if words.is_empty() {
         return true;
@@ -1441,12 +1685,138 @@ fn dcs_marker(token: &str, kind: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Marker, OutputState, ParsedEvent, RuntimeState};
+    use super::{
+        BypassMarkerGuard, ChildCleanup, Marker, OutputEvent, OutputState, ParsedEvent,
+        RuntimeState, Workers,
+    };
     use crate::settings::Settings;
     use std::collections::HashSet;
     use std::io;
     use std::sync::{Arc, Mutex};
     use std::thread;
+
+    #[test]
+    fn dropping_workers_releases_a_blocked_output_sender_and_joins() {
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+
+        let (sender, receiver) = mpsc::sync_channel(0);
+        let mut workers = Workers::new(receiver);
+        let stop = Arc::clone(&workers.stop);
+        let (started, ready) = mpsc::channel();
+        let (completed, outcome) = mpsc::channel();
+        workers.threads.push(thread::spawn(move || {
+            started.send(()).expect("announce the worker is ready");
+            let released = sender.send(OutputEvent::Closed).is_err();
+            completed
+                .send((released, stop.load(Ordering::Relaxed)))
+                .expect("report shutdown behavior");
+        }));
+        ready.recv().expect("wait for the output worker");
+        // The zero-capacity sender cannot complete until this drops the receiver.
+        drop(workers);
+        assert_eq!(
+            outcome
+                .recv()
+                .expect("worker completed before teardown returned"),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn dropping_child_cleanup_kills_and_reaps_a_running_shell() {
+        use portable_pty::{CommandBuilder, PtySize};
+        use std::process::Command;
+
+        let pair = portable_pty::native_pty_system()
+            .openpty(PtySize::default())
+            .expect("open a test PTY");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("start the test child");
+        drop(pair.slave);
+        let pid = child.process_id().expect("a live child has a PID");
+        let cleanup = ChildCleanup {
+            child,
+            master: pair.master.as_ref(),
+        };
+        drop(cleanup);
+        let status = Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .expect("query whether the child still exists")
+            .status;
+        assert!(
+            !status.success(),
+            "startup cleanup must kill and reap the child"
+        );
+    }
+
+    #[test]
+    fn simultaneous_bypass_and_cleanup_failures_keep_the_primary_source() {
+        let primary = crate::Error::with_source(
+            "could not run bypass command".to_owned(),
+            io::Error::new(io::ErrorKind::NotFound, "missing executable"),
+        );
+        let cleanup = crate::Error::with_source(
+            "could not reach the active reading session".to_owned(),
+            io::Error::new(io::ErrorKind::ConnectionRefused, "socket closed"),
+        );
+        let error = super::complete_bypass(Err(primary), Err(cleanup))
+            .expect_err("both failures must be reported");
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::NotFound));
+        let message = format!("{error:#}");
+        assert!(message.contains("missing executable"));
+        assert!(message.contains("bypass cleanup also failed"));
+        assert!(message.contains("socket closed"));
+    }
+
+    #[test]
+    fn bypass_cleanup_runs_on_an_early_error() {
+        use std::io::{Read, Write};
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixListener;
+
+        let temporary = tempfile::tempdir().expect("create a socket directory");
+        let socket = temporary.path().join("control.sock");
+        let listener = UnixListener::bind(&socket).expect("bind the test control socket");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept cleanup request");
+            let mut request = String::new();
+            stream
+                .read_to_string(&mut request)
+                .expect("read cleanup request");
+            stream.write_all(b"ok\n").expect("acknowledge cleanup");
+            stream
+                .shutdown(Shutdown::Write)
+                .expect("finish the response");
+            request
+        });
+        let result: Result<(), io::Error> = {
+            let _guard = BypassMarkerGuard {
+                socket,
+                token: "abcd".to_owned(),
+                marker_token: "test".to_owned(),
+                terminal_marker: false,
+                active: true,
+            };
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "marker write failed",
+            ))
+        };
+        assert_eq!(
+            result.expect_err("simulate a failed marker write").kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(
+            server.join().expect("join the test server"),
+            "bypass-end:abcd"
+        );
+    }
 
     #[test]
     fn poisoned_runtime_rejects_command_output_and_bypass_updates() {

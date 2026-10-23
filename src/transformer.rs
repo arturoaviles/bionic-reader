@@ -9,6 +9,7 @@ use std::str;
 
 use unicode_script::Script;
 
+use crate::Error;
 use crate::settings::Settings;
 
 const MAX_PENDING: usize = 64 * 1024;
@@ -80,18 +81,13 @@ impl StyleState {
                 continue;
             }
             match param.code {
-                0 => {
+                0 | 22 => {
                     self.bold = false;
                     self.dim = false;
                     self.known = true;
                 }
                 1 if self.known => self.bold = true,
                 2 if self.known => self.dim = true,
-                22 => {
-                    self.bold = false;
-                    self.dim = false;
-                    self.known = true;
-                }
                 _ => {}
             }
             index += 1;
@@ -159,9 +155,13 @@ struct EmphasisSettings {
 /// A transformer retains incomplete words and terminal sequences between calls
 /// to [`push`](Self::push). Call [`finish`](Self::finish) when the stream ends so
 /// any remaining complete word can be emitted. Settings supplied to [`new`](Self::new)
-/// must pass [`Settings::validate`] before the transformer is used.
+/// are validated at construction. Use [`try_new`](Self::try_new) for fallible construction.
 #[derive(Debug)]
 #[must_use = "use the transformer to process terminal output"]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent stream states can coexist, including a partial word and an uncertain terminal style"
+)]
 pub struct Transformer {
     settings: EmphasisSettings,
     enabled: bool,
@@ -181,9 +181,22 @@ impl Transformer {
     /// `enabled` controls whether this transformer adds bionic reading emphasis.
     /// Later configuration changes do not affect this stream. Session exclusions
     /// and the style policy are resolved by the caller and are not retained here.
-    /// Settings are not validated here; call [`Settings::validate`] before use.
+    ///
+    /// # Panics
+    ///
+    /// Panics immediately if settings are invalid. Use [`Self::try_new`] for untrusted settings.
     pub fn new(settings: &Settings, enabled: bool) -> Self {
-        Self {
+        Self::try_new(settings, enabled).expect("transformer settings must be valid")
+    }
+
+    /// Validates settings and creates a transformer with its own emphasis snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when [`Settings::validate`] rejects the supplied settings.
+    pub fn try_new(settings: &Settings, enabled: bool) -> Result<Self, Error> {
+        settings.validate()?;
+        Ok(Self {
             settings: EmphasisSettings {
                 fraction: settings.fraction,
                 every: settings.every,
@@ -198,7 +211,7 @@ impl Transformer {
             passthrough_word_letters: 0,
             passthrough_apostrophe: false,
             draining_control: None,
-        }
+        })
     }
 
     /// Processes an input chunk and returns bytes that are ready to emit.
@@ -206,12 +219,6 @@ impl Transformer {
     /// Incomplete words and terminal sequences remain buffered until more input
     /// arrives or the stream is flushed or finished.
     ///
-    /// # Panics
-    ///
-    /// Panics if transformation is enabled, the configured `every` value is zero,
-    /// and the input contains an eligible word. Call [`Settings::validate`] before
-    /// using this transformer. Malformed UTF-8 and incomplete terminal sequences
-    /// do not cause a panic.
     #[must_use = "write or buffer the processed output"]
     pub fn push(&mut self, input: &[u8]) -> Vec<u8> {
         if !self.enabled {
@@ -277,12 +284,6 @@ impl Transformer {
     /// Finishes the stream. A final complete word can be transformed; malformed or
     /// incomplete bytes are emitted unchanged.
     ///
-    /// # Panics
-    ///
-    /// Panics if transformation is enabled, the configured `every` value is zero,
-    /// and an eligible word is selected. Call [`Settings::validate`] before using
-    /// this transformer. Malformed UTF-8 and incomplete terminal sequences do not
-    /// cause a panic.
     #[must_use = "write or buffer the remaining output"]
     pub fn finish(&mut self) -> Vec<u8> {
         if !self.enabled {
@@ -528,6 +529,14 @@ fn select_emphasis(
             continue;
         }
 
+        // A selected word occupies at most MAX_PENDING bytes, so its letter count is
+        // exactly representable as f64. A validated fraction keeps the result in range.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            reason = "the bounded word length and validated fraction make the rounded count safe"
+        )]
         let emphasis_length = (settings.fraction * letters.len() as f64).ceil() as usize;
         if emphasis_length == 0 {
             continue;
@@ -546,7 +555,10 @@ fn render_ansi(
     starts: &BTreeMap<usize, usize>,
     style: &mut StyleState,
 ) -> Vec<u8> {
-    let mut output = Vec::with_capacity(source.len() + tokens.len() * 8);
+    // Reserve for actual emphasized spans, rather than every character token.
+    // SGR resets inside a span may still grow the buffer as required.
+    let mut output =
+        Vec::with_capacity(source.len().saturating_add(starts.len().saturating_mul(17)));
     let mut emphasis_end = None;
     let mut emphasizing = false;
     let indexed_tokens = tokens.iter().enumerate();
@@ -585,10 +597,9 @@ fn render_ansi(
 ///
 /// # Panics
 ///
-/// Panics if `enabled` is true, `settings.every` is zero, and the input contains
-/// an eligible word.
-/// Call [`Settings::validate`] before transforming input. Malformed UTF-8 and
-/// incomplete terminal sequences do not cause a panic; those bytes are preserved.
+/// Panics immediately if settings are invalid. For untrusted settings, construct
+/// a [`Transformer`] with [`Transformer::try_new`]. Malformed UTF-8 and incomplete
+/// terminal sequences do not cause a panic; those bytes are preserved.
 ///
 /// # Examples
 ///
@@ -682,24 +693,21 @@ fn scan_tokens(source: &[u8], eof: bool) -> (Vec<Token>, ParseResult) {
             );
         }
 
-        match str::from_utf8(&source[offset..offset + width]) {
-            Ok(text) => {
-                let character = text.chars().next().expect("one valid UTF-8 character");
-                tokens.push(Token {
-                    start: offset,
-                    end: offset + width,
-                    kind: TokenKind::Text(character),
-                });
-                offset += width;
-            }
-            Err(_) => {
-                tokens.push(Token {
-                    start: offset,
-                    end: offset + 1,
-                    kind: TokenKind::Raw,
-                });
-                offset += 1;
-            }
+        if let Ok(text) = str::from_utf8(&source[offset..offset + width]) {
+            let character = text.chars().next().expect("one valid UTF-8 character");
+            tokens.push(Token {
+                start: offset,
+                end: offset + width,
+                kind: TokenKind::Text(character),
+            });
+            offset += width;
+        } else {
+            tokens.push(Token {
+                start: offset,
+                end: offset + 1,
+                kind: TokenKind::Raw,
+            });
+            offset += 1;
         }
     }
 
@@ -1118,7 +1126,6 @@ fn drain_mode_complete(mode: &mut DrainMode, byte: u8) -> bool {
                 *mode = DrainMode::Escape { intermediate: true };
                 false
             }
-            0x30..=0x7e => true,
             _ => true,
         },
         DrainMode::Csi => (0x40..=0x7e).contains(&byte),
@@ -1147,6 +1154,47 @@ fn drain_mode_complete(mode: &mut DrainMode, byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_settings_are_rejected_before_processing_input() {
+        let invalid = [
+            Settings {
+                every: 0,
+                ..Settings::default()
+            },
+            Settings {
+                fraction: f64::NAN,
+                ..Settings::default()
+            },
+            Settings {
+                fraction: 1.1,
+                ..Settings::default()
+            },
+            Settings {
+                min_word_length: 0,
+                ..Settings::default()
+            },
+        ];
+        for settings in invalid {
+            for enabled in [false, true] {
+                let error = Transformer::try_new(&settings, enabled)
+                    .expect_err("invalid settings must fail at construction");
+                assert!(error.is_invalid_input());
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "transformer settings must be valid")]
+    fn infallible_constructor_reports_invalid_settings_immediately() {
+        let _transformer = Transformer::new(
+            &Settings {
+                every: 0,
+                ..Settings::default()
+            },
+            true,
+        );
+    }
+
     use super::{MAX_PENDING, Transformer};
     use crate::settings::Settings;
 

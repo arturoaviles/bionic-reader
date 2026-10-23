@@ -66,7 +66,7 @@ from pathlib import Path
 repo_root = Path(sys.argv[1])
 crate_path = Path(sys.argv[2])
 package_root = f"{sys.argv[3]}-{sys.argv[4]}"
-source_roots = {"completions", "integrations", "src", "tests"}
+source_roots = {"benches", "completions", "integrations", "src", "tests"}
 support_files = {
     "Cargo.lock",
     "Cargo.toml",

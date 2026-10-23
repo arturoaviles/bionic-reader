@@ -1,4 +1,18 @@
 //! Configuration types and loading for bionic reading behavior.
+//!
+//! [`Settings::load`] resolves built-in defaults, an optional TOML file, and explicit
+//! overrides in that order. Command exclusions from the file and overrides are appended to
+//! the built-in exclusions and deduplicated.
+//!
+//! # Examples
+//!
+//! ```
+//! use bionic_reader::settings::Settings;
+//!
+//! let settings = Settings { every: 2, ..Settings::new() };
+//! settings.validate().expect("the supplied settings are valid");
+//! assert_eq!(settings.every, 2);
+//! ```
 
 use std::collections::HashSet;
 use std::env;
@@ -9,14 +23,17 @@ use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+use crate::Error;
+
 /// Controls when bionic reading emphasis is enabled.
 ///
 /// These three variants are the complete style policy: automatic terminal
 /// detection, unconditional emphasis, or passthrough.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Style {
     /// Enable emphasis when output is a terminal.
+    #[default]
     Auto,
     /// Enable emphasis regardless of the output destination.
     Always,
@@ -28,7 +45,7 @@ pub enum Style {
 ///
 /// Use struct update syntax with [`Default`] to override selected fields.
 /// Validate manually constructed settings before passing them to a transformer.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     /// Fraction of each selected word's letters to emphasize, from `0.0` to `1.0`.
@@ -48,7 +65,7 @@ pub struct Settings {
 /// Unspecified fields leave the resolved settings unchanged. Custom command
 /// exclusions are appended to the built-in list and deduplicated.
 /// Use struct update syntax with [`Default`] to set only selected values.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Overrides {
     /// Fraction of each selected word's letters to emphasize, from `0.0` to `1.0`.
     pub fraction: Option<f64>,
@@ -60,6 +77,14 @@ pub struct Overrides {
     pub style: Option<Style>,
     /// Additional command names to keep in passthrough mode during a session.
     pub exclude_commands: Option<Vec<String>>,
+}
+
+impl Overrides {
+    /// Creates overrides that leave all resolved settings unchanged.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 const DEFAULT_EXCLUDE_COMMANDS: &[&str] = &[
@@ -84,6 +109,12 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Creates settings with the built-in defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Loads defaults, an optional configuration file, and explicit overrides.
     ///
     /// Command exclusions from the file and overrides are appended to the
@@ -93,7 +124,7 @@ impl Settings {
     ///
     /// Returns an error when a configuration file cannot be read or parsed, or
     /// when the resolved settings fail validation.
-    pub fn load(explicit: Option<&Path>, overrides: &Overrides) -> Result<Self, String> {
+    pub fn load(explicit: Option<&Path>, overrides: &Overrides) -> Result<Self, Error> {
         let mut settings = Self::default();
         let path = match explicit {
             Some(path) => Some(path.to_path_buf()),
@@ -104,10 +135,13 @@ impl Settings {
             match fs::read_to_string(&path) {
                 Ok(contents) => {
                     let configured: Settings = toml::from_str(&contents).map_err(|error| {
-                        format!("invalid configuration file {}: {error}", path.display())
+                        Error::invalid_input_with_source(
+                            format!("invalid configuration file {}", path.display()),
+                            error,
+                        )
                     })?;
                     configured.validate().map_err(|error| {
-                        format!("invalid configuration file {}: {error}", path.display())
+                        error.context(format!("invalid configuration file {}", path.display()))
                     })?;
                     settings.fraction = configured.fraction;
                     settings.every = configured.every;
@@ -117,15 +151,15 @@ impl Settings {
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound && explicit.is_none() => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    return Err(format!(
-                        "configuration file {} does not exist",
-                        path.display()
+                    return Err(Error::invalid_input_with_source_hidden(
+                        format!("configuration file {} does not exist", path.display()),
+                        error,
                     ));
                 }
                 Err(error) => {
-                    return Err(format!(
-                        "could not read configuration file {}: {error}",
-                        path.display()
+                    return Err(Error::with_source(
+                        format!("could not read configuration file {}", path.display()),
+                        error,
                     ));
                 }
             }
@@ -157,22 +191,30 @@ impl Settings {
     ///
     /// Returns an error when a numeric value is out of range or a command
     /// exclusion is empty.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), Error> {
         if !self.fraction.is_finite() || !(0.0..=1.0).contains(&self.fraction) {
-            return Err("fraction must be a finite number between 0 and 1".to_owned());
+            return Err(Error::invalid_input(
+                "fraction must be a finite number between 0 and 1".to_owned(),
+            ));
         }
         if self.every == 0 {
-            return Err("every must be a positive integer".to_owned());
+            return Err(Error::invalid_input(
+                "every must be a positive integer".to_owned(),
+            ));
         }
         if self.min_word_length == 0 {
-            return Err("min_word_length must be a positive integer".to_owned());
+            return Err(Error::invalid_input(
+                "min_word_length must be a positive integer".to_owned(),
+            ));
         }
         if self
             .exclude_commands
             .iter()
             .any(|command| command.trim().is_empty())
         {
-            return Err("exclude_commands must not contain empty command names".to_owned());
+            return Err(Error::invalid_input(
+                "exclude_commands must not contain empty command names".to_owned(),
+            ));
         }
         Ok(())
     }
@@ -208,6 +250,7 @@ fn default_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{Overrides, Settings};
+    use std::error::Error as StdError;
     use std::fs;
 
     #[test]
@@ -223,7 +266,7 @@ mod tests {
         let settings = Settings::load(Some(&path), &overrides)
             .expect("load valid configuration with overrides");
 
-        assert_eq!(settings.fraction, 0.75);
+        assert_eq!(settings.fraction.to_bits(), 0.75_f64.to_bits());
         assert_eq!(settings.every, 3);
     }
 
@@ -271,7 +314,37 @@ mod tests {
 
         let error = Settings::load(Some(&path), &Overrides::default())
             .expect_err("invalid fraction must fail validation");
-        assert!(error.contains("fraction must be a finite number between 0 and 1"));
-        assert!(error.contains("broken.toml"));
+        let message = error.to_string();
+        assert!(message.contains("fraction must be a finite number between 0 and 1"));
+        assert!(message.contains("broken.toml"));
+    }
+
+    #[test]
+    fn invalid_toml_preserves_its_source_and_input_classification() {
+        let temp = tempfile::tempdir().expect("create temporary directory");
+        let path = temp.path().join("broken.toml");
+        fs::write(&path, "fraction = [").expect("write invalid TOML");
+
+        let error = Settings::load(Some(&path), &Overrides::default())
+            .expect_err("invalid TOML must fail to load");
+
+        assert!(error.is_invalid_input());
+        assert!(error.source().is_some());
+        assert!(error.to_string().contains("invalid configuration file"));
+    }
+
+    #[test]
+    fn missing_explicit_config_keeps_its_message_and_io_source() {
+        let temp = tempfile::tempdir().expect("create temporary directory");
+        let path = temp.path().join("missing.toml");
+
+        let error = Settings::load(Some(&path), &Overrides::default())
+            .expect_err("missing explicit configuration must fail");
+
+        let expected = format!("configuration file {} does not exist", path.display());
+        assert!(error.to_string().starts_with(&expected));
+        assert!(error.is_invalid_input());
+        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::NotFound));
+        assert!(error.source().is_some());
     }
 }

@@ -14,7 +14,7 @@ fn node_available() -> bool {
 
 #[must_use]
 fn node_native_package() -> Option<String> {
-    let probe = r#"
+    let probe = r"
       const arch = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : null;
       if (process.platform === 'darwin' && arch) {
         console.log(`@arturoaviles/bionic-reader-darwin-${arch}`);
@@ -23,7 +23,7 @@ fn node_native_package() -> Option<String> {
         const libc = report.header.glibcVersionRuntime ? 'gnu' : 'musl';
         console.log(`@arturoaviles/bionic-reader-linux-${arch}-${libc}`);
       }
-    "#;
+    ";
     let output = Command::new("node").args(["-e", probe]).output().ok()?;
     if !output.status.success() {
         return None;
@@ -155,6 +155,7 @@ fn archive_candidates_are_reproducible_and_include_distribution_assets() {
 #[test]
 fn npm_launcher_runs_the_native_binary_and_preserves_status_and_spawn_errors() {
     use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
 
     if !node_available() {
         eprintln!("skipping npm launcher smoke test because node is unavailable");
@@ -227,8 +228,6 @@ fn npm_launcher_runs_the_native_binary_and_preserves_status_and_spawn_errors() {
         .join("node_modules")
         .join(native_package)
         .join("bin/bionic-reader");
-    use std::os::unix::fs::PermissionsExt;
-
     fs::set_permissions(&native_binary, Permissions::from_mode(0o644))
         .expect("remove executable permission from native binary");
     let result = Command::new("node")
