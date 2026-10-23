@@ -28,12 +28,12 @@ complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -s t -l text -
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -s V -l version -d 'Print version'
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -f -a "session" -d 'Start an interactive reading session'
 complete -c bionic-reader -n "__fish_bionic_reader_needs_command" -f -a "init" -d 'Print an opt-in initialization snippet for your shell configuration'
@@ -48,75 +48,75 @@ complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l 
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand session" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand init" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand completions" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand on" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand off" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand toggle" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand reload" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l fraction -d 'Fraction of each selected word to emphasize (0 through 1)' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l every -d 'Emphasize the first eligible word and then every Nth word' -r
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l min-word-length -d 'Minimum number of letters a word must have to receive emphasis' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t''
-always\t''
-never\t''"
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l style -d 'When to apply emphasis: automatically for terminals, always, or never' -r -f -a "auto\t'Enable emphasis when output is a terminal'
+always\t'Enable emphasis regardless of the output destination'
+never\t'Disable emphasis and pass output through unchanged'"
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l config -d 'Read an explicit TOML configuration file' -r -F
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -l exclude -d 'Add a command name to the interactive passthrough exclusions' -r
-complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -s h -l help -d 'Print help'
+complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand bypass" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand help; and not __fish_seen_subcommand_from session init completions on off toggle reload bypass help" -f -a "session" -d 'Start an interactive reading session'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand help; and not __fish_seen_subcommand_from session init completions on off toggle reload bypass help" -f -a "init" -d 'Print an opt-in initialization snippet for your shell configuration'
 complete -c bionic-reader -n "__fish_bionic_reader_using_subcommand help; and not __fish_seen_subcommand_from session init completions on off toggle reload bypass help" -f -a "completions" -d 'Print completion definitions for your shell'

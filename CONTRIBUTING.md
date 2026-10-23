@@ -2,6 +2,8 @@
 
 Contributions should preserve the product decisions in [docs/design.md](docs/design.md), the vocabulary in [GLOSSARY.md](GLOSSARY.md), and the architecture boundary in [docs/adr/0001-session-wide-terminal-transformation.md](docs/adr/0001-session-wide-terminal-transformation.md).
 
+Rust code follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html). Read [the project's Rust style policy](docs/rust-style.md) for its application to this Cargo CLI, documented exceptions, and automated enforcement.
+
 ## Development checks
 
 Use Rust 1.85.1 for the declared minimum compiler. Run the same checks as CI before submitting changes:
@@ -10,7 +12,9 @@ Use Rust 1.85.1 for the declared minimum compiler. Run the same checks as CI bef
 cargo fmt --all -- --check
 cargo check --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 cargo test --locked --all-targets
+cargo test --locked --doc
 scripts/check-distribution.sh
 ```
 

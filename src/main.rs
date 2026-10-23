@@ -1,11 +1,16 @@
+//! Command-line dispatch and deadline-based stdin filtering for bionic reading.
+
 use std::ffi::OsString;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::process;
 use std::time::{Duration, Instant};
 
 use bionic_reader::settings::{Overrides, Settings, Style};
-use bionic_reader::{session, transform::Transformer};
+use bionic_reader::transformer::Transformer;
+use bionic_reader::{session, shell};
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Parser)]
 #[command(
@@ -100,10 +105,12 @@ fn main() {
             1
         }
     };
-    std::process::exit(code);
+    process::exit(code);
 }
 
 fn run() -> Result<i32, Failure> {
+    use std::io::IsTerminal;
+
     let cli = Cli::parse();
     if cli.text.is_some() && cli.command.is_some() {
         return Err(Failure::Usage(
@@ -114,14 +121,14 @@ fn run() -> Result<i32, Failure> {
         Some(Commands::Completions { shell }) => {
             use clap::CommandFactory;
             let shell = match shell.as_str() {
-                "bash" => clap_complete::Shell::Bash,
-                "zsh" => clap_complete::Shell::Zsh,
-                _ => clap_complete::Shell::Fish,
+                "bash" => Shell::Bash,
+                "zsh" => Shell::Zsh,
+                _ => Shell::Fish,
             };
             // The generator treats a writer error as a panic. Buffer its finite
             // output so a closed downstream pipe follows the normal I/O path.
             let mut generated = Vec::new();
-            let binary_name = if shell == clap_complete::Shell::Bash {
+            let binary_name = if shell == Shell::Bash {
                 // clap_complete 4.6.11 formats Bash subcommand cases from the
                 // bin name differently from its command-state assignments.
                 // A normalized root name keeps those generated identifiers in
@@ -131,7 +138,7 @@ fn run() -> Result<i32, Failure> {
                 "bionic-reader"
             };
             clap_complete::generate(shell, &mut Cli::command(), binary_name, &mut generated);
-            if shell == clap_complete::Shell::Bash {
+            if shell == Shell::Bash {
                 let generated = String::from_utf8(generated)
                     .expect("clap_complete generates UTF-8 shell completions")
                     .replace("default bionic__reader", "default bionic-reader")
@@ -143,7 +150,7 @@ fn run() -> Result<i32, Failure> {
             return Ok(0);
         }
         Some(Commands::Init { shell }) => {
-            let code = bionic_reader::shell::init(shell).map_err(Failure::Usage)?;
+            let code = shell::init(shell).map_err(Failure::Usage)?;
             io::stdout().lock().write_all(code.as_bytes())?;
             return Ok(0);
         }
@@ -186,7 +193,7 @@ fn run() -> Result<i32, Failure> {
         Style::Always => true,
         Style::Never => false,
     };
-    let mut renderer = Transformer::new(settings, enabled);
+    let mut renderer = Transformer::new(&settings, enabled);
     let mut output = io::stdout().lock();
     if let Some(text) = cli.text {
         output.write_all(&renderer.push(text.as_bytes()))?;
@@ -204,21 +211,12 @@ fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Res
     let mut flush_timer = PendingFlushTimer::default();
     loop {
         let wait = flush_timer.poll_timeout(Instant::now());
-        let mut descriptor = libc::pollfd {
-            fd: libc::STDIN_FILENO,
-            events: libc::POLLIN,
-            revents: 0,
+        let ready = match stdin_ready(wait) {
+            Ok(ready) => ready,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
         };
-        // SAFETY: descriptor is a valid, initialized pollfd for the duration of this call.
-        let result = unsafe { libc::poll(&mut descriptor, 1, wait) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
-        }
-        if result > 0 {
+        if ready {
             match input.read(&mut buffer) {
                 Ok(0) => {
                     output.write_all(&renderer.finish())?;
@@ -249,6 +247,23 @@ fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Res
     }
 }
 
+fn stdin_ready(timeout_ms: i32) -> io::Result<bool> {
+    let mut descriptor = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // Rust's standard input API has no timed-read operation. POSIX poll lets
+    // partial words flush on their deadline without waiting for more input.
+    // SAFETY: descriptor is a valid, initialized pollfd for the duration of this call.
+    let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result > 0)
+    }
+}
+
 const PARTIAL_WORD_DEADLINE: Duration = Duration::from_millis(50);
 
 #[derive(Default)]
@@ -265,6 +280,7 @@ impl PendingFlushTimer {
         }
     }
 
+    #[must_use]
     fn poll_timeout(&self, now: Instant) -> i32 {
         self.started.map_or(-1, |started| {
             PARTIAL_WORD_DEADLINE
@@ -274,6 +290,7 @@ impl PendingFlushTimer {
         })
     }
 
+    #[must_use]
     fn is_due(&self, now: Instant) -> bool {
         self.started
             .is_some_and(|started| now.saturating_duration_since(started) >= PARTIAL_WORD_DEADLINE)

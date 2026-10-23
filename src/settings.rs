@@ -1,35 +1,64 @@
+//! Configuration types and loading for bionic reading behavior.
+
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+/// Controls when bionic reading emphasis is enabled.
+///
+/// These three variants are the complete style policy: automatic terminal
+/// detection, unconditional emphasis, or passthrough.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Style {
+    /// Enable emphasis when output is a terminal.
     Auto,
+    /// Enable emphasis regardless of the output destination.
     Always,
+    /// Disable emphasis and pass output through unchanged.
     Never,
 }
 
+/// Settings that control bionic reading emphasis and command passthrough.
+///
+/// Use struct update syntax with [`Default`] to override selected fields.
+/// Validate manually constructed settings before passing them to a transformer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Fraction of each selected word's letters to emphasize, from `0.0` to `1.0`.
     pub fraction: f64,
+    /// Word selection frequency: `1` selects every eligible word; `2` selects every other one.
     pub every: usize,
+    /// Minimum number of letters a word needs to be eligible for emphasis.
     pub min_word_length: usize,
+    /// Policy for enabling emphasis.
     pub style: Style,
+    /// Commands whose output should remain in passthrough mode during a session.
     pub exclude_commands: Vec<String>,
 }
 
+/// Optional configuration values that override [`Settings`] defaults and files.
+///
+/// Unspecified fields leave the resolved settings unchanged. Custom command
+/// exclusions are appended to the built-in list and deduplicated.
+/// Use struct update syntax with [`Default`] to set only selected values.
 #[derive(Clone, Debug, Default)]
 pub struct Overrides {
+    /// Fraction of each selected word's letters to emphasize, from `0.0` to `1.0`.
     pub fraction: Option<f64>,
+    /// Word selection frequency: `1` selects every eligible word; `2` selects every other one.
     pub every: Option<usize>,
+    /// Minimum number of letters a word needs to be eligible for emphasis.
     pub min_word_length: Option<usize>,
+    /// Policy for enabling emphasis.
     pub style: Option<Style>,
+    /// Additional command names to keep in passthrough mode during a session.
     pub exclude_commands: Option<Vec<String>>,
 }
 
@@ -55,6 +84,15 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Loads defaults, an optional configuration file, and explicit overrides.
+    ///
+    /// Command exclusions from the file and overrides are appended to the
+    /// built-in exclusions and deduplicated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a configuration file cannot be read or parsed, or
+    /// when the resolved settings fail validation.
     pub fn load(explicit: Option<&Path>, overrides: &Overrides) -> Result<Self, String> {
         let mut settings = Self::default();
         let path = match explicit {
@@ -75,11 +113,10 @@ impl Settings {
                     settings.every = configured.every;
                     settings.min_word_length = configured.min_word_length;
                     settings.style = configured.style;
-                    append_unique(&mut settings.exclude_commands, configured.exclude_commands);
+                    append_unique(&mut settings.exclude_commands, &configured.exclude_commands);
                 }
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound && explicit.is_none() => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(error) if error.kind() == io::ErrorKind::NotFound && explicit.is_none() => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     return Err(format!(
                         "configuration file {} does not exist",
                         path.display()
@@ -107,13 +144,19 @@ impl Settings {
             settings.style = value;
         }
         if let Some(values) = &overrides.exclude_commands {
-            append_unique(&mut settings.exclude_commands, values.clone());
+            append_unique(&mut settings.exclude_commands, values);
         }
 
         settings.validate()?;
         Ok(settings)
     }
 
+    /// Checks that all settings are within their supported ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a numeric value is out of range or a command
+    /// exclusion is empty.
     pub fn validate(&self) -> Result<(), String> {
         if !self.fraction.is_finite() || !(0.0..=1.0).contains(&self.fraction) {
             return Err("fraction must be a finite number between 0 and 1".to_owned());
@@ -135,15 +178,21 @@ impl Settings {
     }
 }
 
-fn append_unique(target: &mut Vec<String>, additions: Vec<String>) {
-    let mut seen: HashSet<String> = target.iter().cloned().collect();
-    for command in additions {
-        if seen.insert(command.clone()) {
-            target.push(command);
+fn append_unique(target: &mut Vec<String>, additions: &[String]) {
+    let unique_additions = {
+        let mut seen: HashSet<&str> = target.iter().map(String::as_str).collect();
+        let mut unique: Vec<String> = Vec::new();
+        for command in additions {
+            if seen.insert(command.as_str()) {
+                unique.push(command.clone());
+            }
         }
-    }
+        unique
+    };
+    target.extend(unique_additions);
 }
 
+#[must_use]
 fn default_config_path() -> Option<PathBuf> {
     if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
         let config_home = PathBuf::from(config_home);
@@ -158,19 +207,21 @@ fn default_config_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Overrides, Settings};
+    use std::fs;
 
     #[test]
     fn command_line_override_wins_over_config_file() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().expect("create temporary directory");
         let path = temp.path().join("config.toml");
-        fs::write(&path, "fraction = 0.25\nevery = 3\n").unwrap();
+        fs::write(&path, "fraction = 0.25\nevery = 3\n").expect("write temporary configuration");
 
         let overrides = Overrides {
             fraction: Some(0.75),
             ..Overrides::default()
         };
-        let settings = Settings::load(Some(&path), &overrides).unwrap();
+        let settings = Settings::load(Some(&path), &overrides)
+            .expect("load valid configuration with overrides");
 
         assert_eq!(settings.fraction, 0.75);
         assert_eq!(settings.every, 3);
@@ -178,15 +229,17 @@ mod tests {
 
     #[test]
     fn custom_command_exclusions_append_to_defaults_and_deduplicate() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().expect("create temporary directory");
         let path = temp.path().join("config.toml");
-        fs::write(&path, "exclude_commands = [\"htop\", \"custom-editor\"]\n").unwrap();
+        fs::write(&path, "exclude_commands = [\"htop\", \"custom-editor\"]\n")
+            .expect("write temporary configuration");
 
         let overrides = Overrides {
             exclude_commands: Some(vec!["custom-editor".to_owned(), "custom-shell".to_owned()]),
             ..Overrides::default()
         };
-        let settings = Settings::load(Some(&path), &overrides).unwrap();
+        let settings =
+            Settings::load(Some(&path), &overrides).expect("load valid command exclusions");
 
         assert!(settings.exclude_commands.contains(&"vim".to_owned()));
         assert!(settings.exclude_commands.contains(&"htop".to_owned()));
@@ -212,11 +265,12 @@ mod tests {
 
     #[test]
     fn invalid_explicit_config_reports_its_path() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().expect("create temporary directory");
         let path = temp.path().join("broken.toml");
-        fs::write(&path, "fraction = 4.0\n").unwrap();
+        fs::write(&path, "fraction = 4.0\n").expect("write invalid test configuration");
 
-        let error = Settings::load(Some(&path), &Overrides::default()).unwrap_err();
+        let error = Settings::load(Some(&path), &Overrides::default())
+            .expect_err("invalid fraction must fail validation");
         assert!(error.contains("fraction must be a finite number between 0 and 1"));
         assert!(error.contains("broken.toml"));
     }

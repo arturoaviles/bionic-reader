@@ -1,26 +1,34 @@
 //! Interactive PTY reading sessions and per-session controls.
 
 use std::collections::HashSet;
+use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs;
+use std::fs::{self, File, Permissions};
 use std::io::{self, Read, Write};
+use std::mem::{self, MaybeUninit};
+use std::net::Shutdown;
 use std::os::fd::RawFd;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus as ProcessExitStatus};
+use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, ExitStatus, PtySize, native_pty_system};
-use signal_hook::consts::signal::*;
+use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
+use signal_hook::consts::signal;
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
 use crate::settings::{Overrides, Settings, Style};
-use crate::transform::Transformer;
+use crate::shell;
+use crate::transformer::{self, Transformer};
+
+// SAFETY JUSTIFICATION: The session must poll inherited terminal descriptors, read raw terminal
+// input, manipulate termios, query terminal dimensions, and signal process groups. The standard
+// library does not expose safe APIs for these POSIX operations. Each unsafe operation below is
+// confined to a helper or a small call site with a valid descriptor, buffer, or child process ID.
 
 const MARKER_LIMIT: usize = 64 * 1024;
 const PENDING_FLUSH: Duration = Duration::from_millis(50);
@@ -29,18 +37,26 @@ const SESSION_ENV: &str = "BIONIC_READER_SESSION";
 const MARKER_TOKEN_ENV: &str = "BIONIC_READER_MARKER_TOKEN";
 
 /// Run a login shell inside a pseudo-terminal and transform marked command output.
+///
+/// # Errors
+///
+/// Returns an error if the caller is not attached to a terminal, the shell cannot be prepared,
+/// or a required terminal, process, or session-control operation fails.
 pub fn run(
     shell: Option<&str>,
     settings: Settings,
     config_path: Option<PathBuf>,
     overrides: Overrides,
 ) -> Result<i32, String> {
-    if !is_terminal(libc::STDIN_FILENO) || !is_terminal(libc::STDOUT_FILENO) {
+    use std::io::IsTerminal;
+    use std::os::unix::fs::PermissionsExt;
+
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("reading sessions require a terminal on both stdin and stdout".to_owned());
     }
 
     let (shell_kind, shell_program) = resolve_shell(shell)?;
-    let terminal_mode = TerminalMode::raw(libc::STDIN_FILENO)
+    let terminal_mode = TerminalMode::try_new(libc::STDIN_FILENO)
         .map_err(|error| format!("could not enter terminal raw mode: {error}"))?;
     let session_temp = tempfile::Builder::new()
         .prefix("bionic-reader-session-")
@@ -50,7 +66,7 @@ pub fn run(
     let socket_path = session_temp.path().join("control.sock");
     let listener = UnixListener::bind(&socket_path)
         .map_err(|error| format!("could not create session control socket: {error}"))?;
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+    fs::set_permissions(&socket_path, Permissions::from_mode(0o600))
         .map_err(|error| format!("could not protect session control socket: {error}"))?;
     listener
         .set_nonblocking(true)
@@ -78,10 +94,10 @@ pub fn run(
     let integration_path = session_temp
         .path()
         .join(format!("integration.{shell_kind}"));
-    fs::write(&integration_path, crate::shell::init(shell_kind)?)
+    fs::write(&integration_path, shell::init(shell_kind)?)
         .map_err(|error| format!("could not prepare shell integration: {error}"))?;
 
-    let pty_system = native_pty_system();
+    let pty_system = portable_pty::native_pty_system();
     let pair = pty_system
         .openpty(current_terminal_size())
         .map_err(|error| format!("could not create reading-session PTY: {error}"))?;
@@ -121,21 +137,13 @@ pub fn run(
         let mut reader = reader;
         let mut buffer = [0_u8; 8192];
         while !reader_stop.load(Ordering::Relaxed) {
-            let mut descriptor = libc::pollfd {
-                fd: reader_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: descriptor is initialized and points to this thread's stack for the call.
-            let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
-            if ready == 0 {
-                continue;
-            }
-            if ready < 0 {
-                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            match wait_for_descriptor(reader_fd, 100) {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                     continue;
                 }
-                break;
+                Err(_) => break,
             }
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
@@ -170,14 +178,14 @@ pub fn run(
 
     while !(child_status.is_some() && output_closed) {
         for signal in signal_receiver.try_iter() {
-            if signal == SIGWINCH {
+            if signal == signal::SIGWINCH {
                 if let Err(error) = master.resize(current_terminal_size()) {
                     loop_error = Some(format!("could not resize reading-session PTY: {error}"));
                     break;
                 }
             } else {
                 forward_to_foreground_group(master.as_ref(), child.process_id(), signal);
-                if signal == SIGTERM || signal == SIGHUP {
+                if signal == signal::SIGTERM || signal == signal::SIGHUP {
                     termination_signal.get_or_insert(signal);
                     if let Some(pid) = child.process_id() {
                         signal_process_group(pid as libc::pid_t, signal);
@@ -302,33 +310,45 @@ pub fn run(
 }
 
 /// Change the active reading-session control state.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported control command, when no reading session is active, or
+/// when the active session rejects or cannot receive the request.
 pub fn control(command: &str) -> Result<(), String> {
     match command {
         "on" | "off" | "toggle" | "reload" => {}
         _ => return Err(format!("unknown reading-session control `{command}`")),
     }
-    let socket = std::env::var_os(CONTROL_SOCKET_ENV)
+    let socket = env::var_os(CONTROL_SOCKET_ENV)
         .map(PathBuf::from)
         .ok_or_else(|| format!("`bionic-reader {command}` requires an active reading session"))?;
     send_control_request(&socket, command)
 }
 
 /// Run a command with session transformation suspended until it completes.
+///
+/// # Errors
+///
+/// Returns an error if the command is missing, no reading session is active, or the bypass
+/// command or its session-control request cannot be started.
 pub fn bypass(command: &[OsString]) -> Result<i32, String> {
+    use std::io::IsTerminal;
+
     let Some(program) = command.first() else {
         return Err("usage: bionic-reader bypass -- <command> [args ...]".to_owned());
     };
-    if std::env::var_os(SESSION_ENV).as_deref() != Some(OsStr::new("1")) {
+    if env::var_os(SESSION_ENV).as_deref() != Some(OsStr::new("1")) {
         return Err("`bionic-reader bypass` requires an active reading session".to_owned());
     }
-    let marker_token = std::env::var(MARKER_TOKEN_ENV)
+    let marker_token = env::var(MARKER_TOKEN_ENV)
         .map_err(|_| "the active reading session has no marker token".to_owned())?;
     let bypass_id = random_token()?;
-    let socket = std::env::var_os(CONTROL_SOCKET_ENV)
+    let socket = env::var_os(CONTROL_SOCKET_ENV)
         .map(PathBuf::from)
         .ok_or_else(|| "the active reading session has no control socket".to_owned())?;
     send_control_request(&socket, &format!("bypass-start:{bypass_id}"))?;
-    let terminal_marker = is_terminal(libc::STDOUT_FILENO);
+    let terminal_marker = io::stdout().is_terminal();
     if terminal_marker {
         write_marker(&dcs_marker(&marker_token, &format!("BYPASS+{bypass_id}")))
             .map_err(|error| format!("could not start bypass: {error}"))?;
@@ -380,8 +400,13 @@ impl Drop for BypassMarkerGuard {
 }
 
 fn run_bypass_command(program: &OsStr, arguments: &[OsString]) -> Result<i32, String> {
-    let mut signals = Signals::new([SIGINT, SIGHUP, SIGQUIT, SIGTERM])
-        .map_err(|error| format!("could not install bypass signal handlers: {error}"))?;
+    let mut signals = Signals::new([
+        signal::SIGINT,
+        signal::SIGHUP,
+        signal::SIGQUIT,
+        signal::SIGTERM,
+    ])
+    .map_err(|error| format!("could not install bypass signal handlers: {error}"))?;
     let signal_handle = signals.handle();
     let (signal_sender, signal_receiver) = mpsc::channel();
     let signal_thread = thread::spawn(move || {
@@ -397,8 +422,7 @@ fn run_bypass_command(program: &OsStr, arguments: &[OsString]) -> Result<i32, St
         .map_err(|error| format!("could not run bypass command: {error}"))?;
     let status = loop {
         for signal in signal_receiver.try_iter() {
-            // SAFETY: child.id() is a live process ID and the signal is from signal-hook.
-            unsafe { libc::kill(child.id() as libc::pid_t, signal) };
+            signal_process(child.id() as libc::pid_t, signal);
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -423,7 +447,7 @@ fn send_control_request(socket: &Path, request: &str) -> Result<(), String> {
         .write_all(request.as_bytes())
         .map_err(|error| format!("could not send session control: {error}"))?;
     stream
-        .shutdown(std::net::Shutdown::Write)
+        .shutdown(Shutdown::Write)
         .map_err(|error| format!("could not finish session control request: {error}"))?;
     let mut response = String::new();
     stream
@@ -440,12 +464,16 @@ fn send_control_request(socket: &Path, request: &str) -> Result<(), String> {
     }
 }
 
+#[must_use]
 fn process_exit_code(status: ProcessExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+
     status
         .code()
         .unwrap_or_else(|| status.signal().map(|signal| 128 + signal).unwrap_or(1))
 }
 
+#[must_use]
 fn pty_exit_code(status: &ExitStatus) -> i32 {
     if let Some(signal) = status.signal() {
         match signal {
@@ -460,21 +488,18 @@ fn pty_exit_code(status: &ExitStatus) -> i32 {
     }
 }
 
+#[must_use]
 fn signal_exit_code(signal: i32) -> i32 {
     match signal {
-        SIGHUP => 129,
-        SIGINT => 130,
-        SIGQUIT => 131,
-        SIGTERM => 143,
+        signal::SIGHUP => 129,
+        signal::SIGINT => 130,
+        signal::SIGQUIT => 131,
+        signal::SIGTERM => 143,
         _ => 128 + signal,
     }
 }
 
-fn forward_to_foreground_group(
-    master: &dyn portable_pty::MasterPty,
-    fallback_pid: Option<u32>,
-    signal: i32,
-) {
+fn forward_to_foreground_group(master: &dyn MasterPty, fallback_pid: Option<u32>, signal: i32) {
     let group = master
         .process_group_leader()
         .or_else(|| fallback_pid.map(|pid| pid as libc::pid_t));
@@ -491,16 +516,22 @@ fn signal_process_group(group: libc::pid_t, signal: i32) {
     }
 }
 
-fn kill_session_groups(master: &dyn portable_pty::MasterPty, shell_pid: u32) {
-    if let Some(foreground) = master.process_group_leader() {
-        if foreground != shell_pid as libc::pid_t {
-            signal_process_group(foreground, SIGKILL);
-        }
+fn signal_process(process_id: libc::pid_t, signal: i32) {
+    if process_id > 0 {
+        // SAFETY: the PID is returned by `std::process::Child::id` for a live child process.
+        let _ = unsafe { libc::kill(process_id, signal) };
     }
-    signal_process_group(shell_pid as libc::pid_t, SIGKILL);
 }
 
-#[derive(Clone)]
+fn kill_session_groups(master: &dyn MasterPty, shell_pid: u32) {
+    if let Some(foreground) = master.process_group_leader() {
+        if foreground != shell_pid as libc::pid_t {
+            signal_process_group(foreground, signal::SIGKILL);
+        }
+    }
+    signal_process_group(shell_pid as libc::pid_t, signal::SIGKILL);
+}
+
 struct RuntimeState {
     settings: Settings,
     enabled: bool,
@@ -548,7 +579,7 @@ fn spawn_control_server(
 
 fn handle_control_request(
     stream: &mut UnixStream,
-    state: &Arc<Mutex<RuntimeState>>,
+    state: &Mutex<RuntimeState>,
     reload_source: &ReloadSource,
 ) -> Result<(), String> {
     let mut request = String::new();
@@ -607,33 +638,52 @@ enum OutputEvent {
     Closed,
 }
 
+fn wait_for_descriptor(fd: RawFd, timeout_ms: i32) -> io::Result<bool> {
+    let mut descriptor = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: `descriptor` is initialized and points to this stack frame for the call.
+    let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+    match ready {
+        -1 => Err(io::Error::last_os_error()),
+        0 => Ok(false),
+        _ => Ok(true),
+    }
+}
+
+fn read_descriptor(fd: RawFd, buffer: &mut [u8]) -> io::Result<usize> {
+    // SAFETY: `buffer` is a valid writable slice and remains alive for the call.
+    let count = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+    if count < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        // POSIX `read` never reports more bytes than the buffer length on success.
+        Ok(count as usize)
+    }
+}
+
 fn spawn_input_pump(mut writer: Box<dyn Write + Send>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0_u8; 4096];
         while !stop.load(Ordering::Relaxed) {
-            let mut descriptor = libc::pollfd {
-                fd: libc::STDIN_FILENO,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: descriptor is initialized and points to this thread's stack for the call.
-            let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
-            if ready < 0 {
-                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            match wait_for_descriptor(libc::STDIN_FILENO, 100) {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                     continue;
                 }
+                Err(_) => break,
+            }
+            let count = match read_descriptor(libc::STDIN_FILENO, &mut buffer) {
+                Ok(count) => count,
+                Err(_) => break,
+            };
+            if count == 0 {
                 break;
             }
-            if ready == 0 {
-                continue;
-            }
-            // SAFETY: buffer is writable and STDIN_FILENO is the session's inherited tty.
-            let count =
-                unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
-            if count <= 0 {
-                break;
-            }
-            if writer.write_all(&buffer[..count as usize]).is_err() || writer.flush().is_err() {
+            if writer.write_all(&buffer[..count]).is_err() || writer.flush().is_err() {
                 break;
             }
         }
@@ -641,7 +691,13 @@ fn spawn_input_pump(mut writer: Box<dyn Write + Send>, stop: Arc<AtomicBool>) ->
 }
 
 fn spawn_signal_pump(sender: mpsc::Sender<i32>) -> io::Result<(SignalHandle, JoinHandle<()>)> {
-    let mut signals = Signals::new([SIGWINCH, SIGHUP, SIGINT, SIGQUIT, SIGTERM])?;
+    let mut signals = Signals::new([
+        signal::SIGWINCH,
+        signal::SIGHUP,
+        signal::SIGINT,
+        signal::SIGQUIT,
+        signal::SIGTERM,
+    ])?;
     let handle = signals.handle();
     let thread = thread::spawn(move || {
         for signal in signals.forever() {
@@ -659,8 +715,8 @@ struct TerminalMode {
 }
 
 impl TerminalMode {
-    fn raw(fd: RawFd) -> io::Result<Self> {
-        let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
+    fn try_new(fd: RawFd) -> io::Result<Self> {
+        let mut original: MaybeUninit<libc::termios> = MaybeUninit::uninit();
         // SAFETY: tcgetattr initializes the termios value when it returns zero.
         if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
             return Err(io::Error::last_os_error());
@@ -687,13 +743,9 @@ impl Drop for TerminalMode {
     }
 }
 
-fn is_terminal(fd: RawFd) -> bool {
-    // SAFETY: isatty only inspects the file descriptor and does not retain it.
-    unsafe { libc::isatty(fd) == 1 }
-}
-
+#[must_use]
 fn current_terminal_size() -> PtySize {
-    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+    let mut size: MaybeUninit<libc::winsize> = MaybeUninit::zeroed();
     // SAFETY: size is a valid winsize output buffer for TIOCGWINSZ.
     let result = unsafe {
         libc::ioctl(
@@ -723,7 +775,7 @@ fn current_terminal_size() -> PtySize {
 
 fn random_token() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
-    let mut random = fs::File::open("/dev/urandom")
+    let mut random = File::open("/dev/urandom")
         .map_err(|error| format!("could not access system randomness: {error}"))?;
     random
         .read_exact(&mut bytes)
@@ -740,10 +792,10 @@ fn random_token() -> Result<String, String> {
 fn resolve_shell(shell: Option<&str>) -> Result<(&'static str, OsString), String> {
     let requested = shell
         .map(OsString::from)
-        .or_else(|| std::env::var_os("SHELL"))
+        .or_else(|| env::var_os("SHELL"))
         .unwrap_or_else(|| OsString::from("/bin/bash"));
     let requested_string = requested.to_string_lossy();
-    let kind = crate::shell::normalize_shell(&requested_string)?;
+    let kind = shell::normalize_shell(&requested_string)?;
     Ok((kind, requested))
 }
 
@@ -762,7 +814,7 @@ fn configure_shell(
     command.env("BIONIC_READER_INTEGRATION", integration_path);
     match shell_kind {
         "bash" => {
-            let user_rc = std::env::var_os("HOME")
+            let user_rc = env::var_os("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".bashrc");
@@ -780,8 +832,8 @@ fn configure_shell(
             command.arg("-i");
         }
         "zsh" => {
-            let user_zdotdir = std::env::var_os("ZDOTDIR")
-                .or_else(|| std::env::var_os("HOME"))
+            let user_zdotdir = env::var_os("ZDOTDIR")
+                .or_else(|| env::var_os("HOME"))
                 .unwrap_or_else(|| OsString::from("."));
             command.env("__BIONIC_READER_USER_ZDOTDIR", &user_zdotdir);
             command.env("ZDOTDIR", temp_dir);
@@ -850,6 +902,7 @@ struct MarkerParser {
 }
 
 impl MarkerParser {
+    #[must_use]
     fn new(token: &str) -> Self {
         Self {
             pending: Vec::new(),
@@ -859,6 +912,7 @@ impl MarkerParser {
         }
     }
 
+    #[must_use]
     fn push(&mut self, input: &[u8]) -> Vec<ParsedEvent> {
         if self.pending.is_empty() && !input.is_empty() {
             self.pending_since = Some(Instant::now());
@@ -899,7 +953,7 @@ impl MarkerParser {
             }
             let Some(end) = find_subslice(&self.pending[2..], b"\x1b\\") else {
                 if self.pending.len() > MARKER_LIMIT {
-                    let bytes = std::mem::take(&mut self.pending);
+                    let bytes = mem::take(&mut self.pending);
                     events.push(ParsedEvent::Marker(Marker::UnsafeDcs(bytes)));
                     self.discard_dcs = true;
                 }
@@ -922,6 +976,7 @@ impl MarkerParser {
         events
     }
 
+    #[must_use]
     fn flush_pending(&mut self) -> Vec<ParsedEvent> {
         let stalled = self
             .pending_since
@@ -929,7 +984,7 @@ impl MarkerParser {
         if !stalled || self.pending.is_empty() {
             return Vec::new();
         }
-        let bytes = std::mem::take(&mut self.pending);
+        let bytes = mem::take(&mut self.pending);
         if bytes.starts_with(b"\x1bP") {
             self.discard_dcs = true;
         }
@@ -937,16 +992,18 @@ impl MarkerParser {
         vec![ParsedEvent::Marker(Marker::UnsafeDcs(bytes))]
     }
 
+    #[must_use]
     fn finish(&mut self) -> Vec<ParsedEvent> {
         if self.pending.is_empty() {
             Vec::new()
         } else {
-            vec![ParsedEvent::Marker(Marker::UnsafeDcs(std::mem::take(
+            vec![ParsedEvent::Marker(Marker::UnsafeDcs(mem::take(
                 &mut self.pending,
             )))]
         }
     }
 
+    #[must_use]
     fn parse_marker(&self, payload: &[u8]) -> Option<Marker> {
         let rest = payload.strip_prefix(self.token_prefix.as_slice())?;
         if rest == b"END" || rest == b"END:" {
@@ -972,10 +1029,12 @@ impl MarkerParser {
     }
 }
 
+#[must_use]
 fn is_marker_id(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.len() <= 64 && bytes.iter().all(u8::is_ascii_hexdigit)
 }
 
+#[must_use]
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
@@ -986,28 +1045,23 @@ struct OutputState {
     runtime: Arc<Mutex<RuntimeState>>,
     transformer: Option<Transformer>,
     in_command: bool,
-    command_allowed: bool,
-    command_enabled: bool,
     transforming: bool,
     unsafe_interval: bool,
     bypass_tokens: HashSet<String>,
-    command_settings: Option<Settings>,
     pending_since: Option<Instant>,
     utf8_boundary: Utf8Boundary,
 }
 
 impl OutputState {
+    #[must_use]
     fn new(runtime: Arc<Mutex<RuntimeState>>) -> Self {
         Self {
             runtime,
             transformer: None,
             in_command: false,
-            command_allowed: false,
-            command_enabled: false,
             transforming: false,
             unsafe_interval: false,
             bypass_tokens: HashSet::new(),
-            command_settings: None,
             pending_since: None,
             utf8_boundary: Utf8Boundary::default(),
         }
@@ -1035,25 +1089,19 @@ impl OutputState {
         if self.in_command {
             self.end(output)?;
         }
-        retire_ended_bypass(&self.runtime, &mut self.bypass_tokens);
-        let snapshot = self
+        retire_ended_bypass(&self.runtime, &mut self.bypass_tokens)?;
+        let runtime = self
             .runtime
             .lock()
-            .map(|state| state.clone())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
-        self.command_allowed = !command_is_excluded(metadata, &snapshot.settings);
-        self.command_settings = Some(snapshot.settings.clone());
+            .map_err(|_| io::Error::other("reading-session runtime state was poisoned"))?;
+        let command_allowed = !command_is_excluded(metadata, &runtime.settings);
         self.in_command = true;
-        self.command_enabled = snapshot.enabled;
         self.unsafe_interval = false;
-        self.bypass_tokens = snapshot.bypass_tokens.clone();
-        self.transforming = snapshot.enabled
-            && self.command_allowed
-            && self.bypass_tokens.is_empty()
-            && snapshot.bypass_tokens.is_empty();
+        self.bypass_tokens = runtime.bypass_tokens.clone();
+        self.transforming = runtime.enabled && command_allowed && self.bypass_tokens.is_empty();
         self.transformer = self
             .transforming
-            .then(|| Transformer::new(snapshot.settings, true));
+            .then(|| Transformer::new(&runtime.settings, /* enabled */ true));
         self.pending_since = None;
         self.utf8_boundary = Utf8Boundary::default();
         Ok(())
@@ -1064,14 +1112,11 @@ impl OutputState {
             self.flush_transformer(output)?;
         }
         self.transformer = None;
-        self.command_settings = None;
         self.pending_since = None;
         self.in_command = false;
-        self.command_allowed = false;
-        self.command_enabled = false;
         self.transforming = false;
         self.unsafe_interval = false;
-        retire_ended_bypass(&self.runtime, &mut self.bypass_tokens);
+        retire_ended_bypass(&self.runtime, &mut self.bypass_tokens)?;
         Ok(())
     }
 
@@ -1148,8 +1193,9 @@ impl OutputState {
         let current = self
             .runtime
             .lock()
-            .map(|state| state.bypass_tokens.clone())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().bypass_tokens.clone());
+            .map_err(|_| io::Error::other("reading-session runtime state was poisoned"))?
+            .bypass_tokens
+            .clone();
         let was_empty = self.bypass_tokens.is_empty();
         self.bypass_tokens.extend(current);
         if was_empty && !self.bypass_tokens.is_empty() && self.transforming {
@@ -1160,20 +1206,25 @@ impl OutputState {
     }
 }
 
-fn retire_ended_bypass(runtime: &Arc<Mutex<RuntimeState>>, active: &mut HashSet<String>) {
+fn retire_ended_bypass(
+    runtime: &Mutex<RuntimeState>,
+    active: &mut HashSet<String>,
+) -> io::Result<()> {
     let ended = {
         let mut state = runtime
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let ended = std::mem::take(&mut state.ended_bypass_tokens);
+            .map_err(|_| io::Error::other("reading-session runtime state was poisoned"))?;
+        let ended = mem::take(&mut state.ended_bypass_tokens);
         for token in &ended {
             state.bypass_tokens.remove(token);
         }
         ended
     };
     active.retain(|token| !ended.contains(token));
+    Ok(())
 }
 
+#[must_use]
 fn command_is_excluded(metadata: &[u8], settings: &Settings) -> bool {
     if metadata.len() > MARKER_LIMIT
         || metadata
@@ -1182,7 +1233,7 @@ fn command_is_excluded(metadata: &[u8], settings: &Settings) -> bool {
     {
         return true;
     }
-    let Ok(encoded) = std::str::from_utf8(metadata) else {
+    let Ok(encoded) = str::from_utf8(metadata) else {
         return true;
     };
     let decoded = decode_ansi_c_quote(encoded);
@@ -1256,6 +1307,7 @@ fn command_is_excluded(metadata: &[u8], settings: &Settings) -> bool {
 
 // Bash 3.2's %q uses ANSI-C quoting for non-ASCII bytes under LC_ALL=C.
 // Decode its finite escape alphabet as data; never evaluate shell metadata.
+#[must_use]
 fn decode_ansi_c_quote(encoded: &str) -> Option<String> {
     let bytes = encoded.strip_prefix("$'")?.strip_suffix('\'')?.as_bytes();
     let mut output = Vec::new();
@@ -1304,6 +1356,7 @@ struct Utf8Boundary {
 }
 
 impl Utf8Boundary {
+    #[must_use]
     fn consumes(&mut self, byte: u8) -> bool {
         if self.remaining > 0 {
             if (self.next_min..=self.next_max).contains(&byte) {
@@ -1331,6 +1384,7 @@ impl Utf8Boundary {
     }
 }
 
+#[must_use]
 fn has_unsafe_control(bytes: &[u8], utf8_boundary: &mut Utf8Boundary) -> bool {
     let mut index = 0;
     while index < bytes.len() {
@@ -1348,7 +1402,7 @@ fn has_unsafe_control(bytes: &[u8], utf8_boundary: &mut Utf8Boundary) -> bool {
             };
             let end = start + relative_end;
             if bytes[end] != b'm'
-                && !crate::transform::is_presentation_neutral_control(&bytes[index..=end])
+                && !transformer::is_presentation_neutral_control(&bytes[index..=end])
             {
                 return true;
             }
@@ -1362,13 +1416,13 @@ fn has_unsafe_control(bytes: &[u8], utf8_boundary: &mut Utf8Boundary) -> bool {
                 }
                 end += 1;
             }
-            if end == bytes.len() || !crate::transform::is_safe_osc(&bytes[payload_start..end]) {
+            if end == bytes.len() || !transformer::is_safe_osc(&bytes[payload_start..end]) {
                 return true;
             }
             index = end + if bytes[end] == 0x07 { 1 } else { 2 };
         } else if bytes
             .get(index..index + 3)
-            .is_some_and(crate::transform::is_presentation_neutral_control)
+            .is_some_and(transformer::is_presentation_neutral_control)
         {
             index += 3;
         } else if matches!(bytes[index], 0x1b | 0x90 | 0x9b | 0x9c | 0x9d | 0x9e | 0x9f) {
@@ -1380,6 +1434,54 @@ fn has_unsafe_control(bytes: &[u8], utf8_boundary: &mut Utf8Boundary) -> bool {
     false
 }
 
+#[must_use]
 fn dcs_marker(token: &str, kind: &str) -> Vec<u8> {
     format!("\x1bP+BIONIC_READER;{token};{kind}\x1b\\").into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Marker, OutputState, ParsedEvent, RuntimeState};
+    use crate::settings::Settings;
+    use std::collections::HashSet;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    #[test]
+    fn poisoned_runtime_rejects_command_output_and_bypass_updates() {
+        let runtime = Arc::new(Mutex::new(RuntimeState {
+            settings: Settings::default(),
+            enabled: true,
+            enabled_override: None,
+            bypass_tokens: HashSet::new(),
+            ended_bypass_tokens: HashSet::new(),
+        }));
+        let worker_runtime = Arc::clone(&runtime);
+        thread::spawn(move || {
+            let _guard = worker_runtime.lock().expect("lock the fresh runtime state");
+            panic!("simulate a worker failure while updating the runtime");
+        })
+        .join()
+        .expect_err("the simulated worker failure must poison the runtime");
+
+        let mut state = OutputState::new(runtime);
+        let mut output = Vec::new();
+        let error = state
+            .process(
+                ParsedEvent::Marker(Marker::Begin(b"printf reading".to_vec())),
+                &mut output,
+            )
+            .expect_err("a command must not read potentially inconsistent runtime state");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(
+            output.is_empty(),
+            "no command bytes may escape after runtime corruption"
+        );
+
+        let error = state
+            .sync_bypass(&mut output)
+            .expect_err("bypass updates must also reject potentially inconsistent runtime state");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
 }

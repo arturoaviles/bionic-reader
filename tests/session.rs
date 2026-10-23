@@ -1,33 +1,52 @@
+//! PTY integration tests for shell hooks, session controls, and transformed command output.
+
+use std::env;
+use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::mem::MaybeUninit;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
+
+// SAFETY JUSTIFICATION: These tests send POSIX signals to their live session process and inspect
+// the PTY's termios state. The standard library has no safe APIs for those checks; the calls use
+// process IDs from the test child and initialized termios buffers owned by the test.
 
 #[cfg(unix)]
 #[test]
 fn bash_prompt_sees_the_failed_commands_exit_status() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='STATUS:$? READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='STATUS:$? READY> '\n")
+        .expect("write the session test fixture");
     let (output, status) = run_session("/bin/bash", home.path(), b"false\nexit 0\n", None);
-    assert_eq!(status, 0);
+    assert_eq!(
+        status, 0,
+        "Bash session should exit after the test commands"
+    );
     assert_contains(&output, b"STATUS:1 READY> ");
 }
 
 #[cfg(unix)]
 #[test]
 fn latin_utf8_continuation_bytes_are_not_terminal_controls() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write a session shell startup fixture");
     let (output, status) = run_session(
         "/bin/bash",
         home.path(),
         "printf 'Ûnicode reading\\n'\nexit 0\n".as_bytes(),
         None,
     );
-    assert_eq!(status, 0);
+    assert_eq!(
+        status, 0,
+        "Bash session should exit after the test commands"
+    );
     assert_contains(&output, "\x1b[1mÛnic\x1b[22mode".as_bytes());
     assert_contains(&output, b"\x1b[1mread\x1b[22ming");
 }
@@ -35,15 +54,20 @@ fn latin_utf8_continuation_bytes_are_not_terminal_controls() {
 #[cfg(unix)]
 #[test]
 fn split_utf8_and_malformed_bytes_do_not_hang_or_disable_session_output() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write a session shell startup fixture");
     let (output, status) = run_session(
         "/bin/bash",
         home.path(),
         b"printf '\\303'; sleep 0.1; printf '\\233nicode reading\\n'\nprintf '\\377reading\\n'\nexit 0\n",
         None,
     );
-    assert_eq!(status, 0);
+    assert_eq!(
+        status, 0,
+        "Bash session should exit after the test commands"
+    );
     let plain = strip_sgr(&output);
     assert_contains(&plain, "Ûnicode reading\r\n".as_bytes());
     assert_contains(&plain, b"\xffreading\r\n");
@@ -57,12 +81,13 @@ fn split_utf8_and_malformed_bytes_do_not_hang_or_disable_session_output() {
 #[cfg(unix)]
 #[test]
 fn bash_command_output_is_emphasized_and_existing_hooks_are_preserved() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(
         home.path().join(".bashrc"),
         "PS1='READY> '\nPROMPT_COMMAND='printf \"<PROMPT:%s>\" \"$?\"'\ntrap 'printf \"<DEBUG>\" >&2' DEBUG\n",
     )
-    .unwrap();
+    .expect("write the session test fixture");
 
     let (output, status) = run_session(
         "/bin/bash",
@@ -90,8 +115,10 @@ fn bash_command_output_is_emphasized_and_existing_hooks_are_preserved() {
 #[cfg(unix)]
 #[test]
 fn bash_split_unsafe_terminal_control_disables_transforming_until_prompt() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write a session shell startup fixture");
 
     let (output, status) = run_session(
         "/bin/bash",
@@ -123,8 +150,9 @@ fn bash_split_unsafe_terminal_control_disables_transforming_until_prompt() {
 #[cfg(unix)]
 #[test]
 fn zsh_command_output_is_emphasized_and_prompt_hooks_stay_raw() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(
         home.path().join(".zshrc"),
         concat!(
             "PROMPT='READY> '\n",
@@ -134,7 +162,7 @@ fn zsh_command_output_is_emphasized_and_prompt_hooks_stay_raw() {
             "preexec_functions+=(user_preexec)\n",
         ),
     )
-    .unwrap();
+    .expect("write the session shell startup configuration");
 
     let (output, status) = run_session(
         "/bin/zsh",
@@ -152,10 +180,11 @@ fn zsh_command_output_is_emphasized_and_prompt_hooks_stay_raw() {
 #[cfg(unix)]
 #[test]
 fn fish_command_output_is_emphasized_and_prompt_hooks_stay_raw() {
-    let home = tempfile::tempdir().unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
     let fish_config = home.path().join(".config/fish");
-    std::fs::create_dir_all(&fish_config).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&fish_config).expect("create the session test fixture directory");
+    fs::write(
         fish_config.join("config.fish"),
         concat!(
             "function fish_prompt; printf '<FPROMPT>READY> '; end\n",
@@ -163,15 +192,19 @@ fn fish_command_output_is_emphasized_and_prompt_hooks_stay_raw() {
             "function user_fish_postexec --on-event fish_postexec; set -l br_status $status; printf '<FPOST:%s>' $br_status; end\n",
         ),
     )
-    .unwrap();
-    let fish = std::env::var("FISH_BIN").unwrap_or_else(|_| "fish".to_owned());
+    .expect("write the session shell startup configuration");
+    let fish = env::var("FISH_BIN").unwrap_or_else(|_| "fish".to_owned());
     let fish_dir = Path::new(&fish).parent().unwrap_or_else(|| Path::new("."));
 
     let (output, status) = run_session(
         &fish,
         home.path(),
         b"printf 'reading\\n'\nfalse\nexit 0\n",
-        Some(fish_dir.to_str().unwrap()),
+        Some(
+            fish_dir
+                .to_str()
+                .expect("the test shell path should be valid UTF-8"),
+        ),
     );
     assert_eq!(status, 0, "fish session failed: {}", display(&output));
     assert_contains(&output, b"\x1b[1mread\x1b[22ming");
@@ -183,11 +216,14 @@ fn fish_command_output_is_emphasized_and_prompt_hooks_stay_raw() {
 #[cfg(unix)]
 #[test]
 fn explicit_on_overrides_a_never_style_for_later_session_commands() {
-    let home = tempfile::tempdir().unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
     let config = home.path().join(".config/bionic-reader");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(config.join("config.toml"), "style = 'never'\n").unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    fs::create_dir_all(&config).expect("create the session test fixture directory");
+    fs::write(config.join("config.toml"), "style = 'never'\n")
+        .expect("write the session test fixture");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write the session test fixture");
 
     let (output, status) = run_session(
         "/bin/bash",
@@ -203,11 +239,14 @@ fn explicit_on_overrides_a_never_style_for_later_session_commands() {
 #[cfg(unix)]
 #[test]
 fn invalid_reload_keeps_the_last_valid_settings_and_valid_reload_applies_next_command() {
-    let home = tempfile::tempdir().unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
     let config = home.path().join(".config/bionic-reader");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(config.join("config.toml"), "style = 'always'\n").unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    fs::create_dir_all(&config).expect("create the session test fixture directory");
+    fs::write(config.join("config.toml"), "style = 'always'\n")
+        .expect("write the session test fixture");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write the session test fixture");
 
     let commands = b"printf '<1>'; printf 'reading\\n'\nprintf \"fraction = 2.0\\n\" > \"$HOME/.config/bionic-reader/config.toml\"\nbionic-reader reload\nprintf '<2>'; printf 'reading\\n'\nprintf \"style = 'never'\\n\" > \"$HOME/.config/bionic-reader/config.toml\"\nbionic-reader reload\nprintf '<3>'; printf 'reading\\n'\nexit 0\n";
     let (output, status) = run_session("/bin/bash", home.path(), commands, None);
@@ -221,8 +260,10 @@ fn invalid_reload_keeps_the_last_valid_settings_and_valid_reload_applies_next_co
 #[cfg(unix)]
 #[test]
 fn redirected_bypass_keeps_file_bytes_and_restores_the_next_command() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write a session shell startup fixture");
 
     let (output, status) = run_session(
         "/bin/bash",
@@ -232,7 +273,8 @@ fn redirected_bypass_keeps_file_bytes_and_restores_the_next_command() {
     );
     assert_eq!(status, 0, "Bash session failed: {}", display(&output));
     assert_eq!(
-        std::fs::read(home.path().join("bypass.out")).unwrap(),
+        fs::read(home.path().join("bypass.out"))
+            .expect("read the output file created by the bypass test"),
         b"raw\n"
     );
     assert_contains(&output, b"\x1b[1mread\x1b[22ming\r\n");
@@ -242,13 +284,14 @@ fn redirected_bypass_keeps_file_bytes_and_restores_the_next_command() {
 #[cfg(unix)]
 #[test]
 fn bash_framework_adapters_share_one_idempotent_initializer() {
-    let home = tempfile::tempdir().unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
     let startup = format!(
         "PS1='READY> '\n{}\n{}\n",
         include_str!("../integrations/adapters/bash-it/bionic-reader/bionic-reader.plugin.bash"),
         include_str!("../integrations/adapters/oh-my-bash/bionic-reader/bionic-reader.plugin.sh"),
     );
-    std::fs::write(home.path().join(".bashrc"), startup).unwrap();
+    fs::write(home.path().join(".bashrc"), startup).expect("write the session test fixture");
 
     let (output, status) = run_session(
         "/bin/bash",
@@ -268,14 +311,15 @@ fn bash_framework_adapters_share_one_idempotent_initializer() {
 #[cfg(unix)]
 #[test]
 fn zsh_framework_adapters_share_one_idempotent_initializer() {
-    let home = tempfile::tempdir().unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
     let startup = format!(
         "PROMPT='READY> '\n{}\n{}\n{}\n",
         include_str!("../integrations/adapters/oh-my-zsh/bionic-reader/bionic-reader.plugin.zsh"),
         include_str!("../integrations/adapters/prezto/bionic-reader/init.zsh"),
         include_str!("../integrations/adapters/zinit/bionic-reader/init.zsh"),
     );
-    std::fs::write(home.path().join(".zshrc"), startup).unwrap();
+    fs::write(home.path().join(".zshrc"), startup).expect("write the session test fixture");
 
     let (output, status) = run_session(
         "/bin/zsh",
@@ -295,23 +339,30 @@ fn zsh_framework_adapters_share_one_idempotent_initializer() {
 #[cfg(unix)]
 #[test]
 fn fish_framework_adapters_share_one_idempotent_initializer() {
-    let home = tempfile::tempdir().unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
     let fish_config = home.path().join(".config/fish");
-    std::fs::create_dir_all(fish_config.join("conf.d")).unwrap();
+    fs::create_dir_all(fish_config.join("conf.d"))
+        .expect("create the session test fixture directory");
     let adapter_config = format!(
         "function fish_prompt; printf 'READY> '; end\n{}\n{}\n",
         include_str!("../integrations/adapters/fisher/bionic-reader/conf.d/bionic-reader.fish"),
         include_str!("../integrations/adapters/oh-my-fish/bionic-reader/init.fish"),
     );
-    std::fs::write(fish_config.join("config.fish"), adapter_config).unwrap();
-    let fish = std::env::var("FISH_BIN").unwrap_or_else(|_| "fish".to_owned());
+    fs::write(fish_config.join("config.fish"), adapter_config)
+        .expect("write the session test fixture");
+    let fish = env::var("FISH_BIN").unwrap_or_else(|_| "fish".to_owned());
     let fish_dir = Path::new(&fish).parent().unwrap_or_else(|| Path::new("."));
 
     let (output, status) = run_session(
         &fish,
         home.path(),
         b"printf 'reading\\n'\nexit 0\n",
-        Some(fish_dir.to_str().unwrap()),
+        Some(
+            fish_dir
+                .to_str()
+                .expect("the test shell path should be valid UTF-8"),
+        ),
     );
     assert_eq!(status, 0, "fish session failed: {}", display(&output));
     assert_eq!(
@@ -325,26 +376,32 @@ fn fish_framework_adapters_share_one_idempotent_initializer() {
 #[cfg(unix)]
 #[test]
 fn external_term_exits_the_session_and_restores_terminal_mode() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write a session shell startup fixture");
 
-    let (output, status, raw_during, restored) =
-        run_session_with_term_signal("/bin/bash", home.path());
+    let result = run_session_with_term_signal("/bin/bash", home.path());
     assert_eq!(
-        status,
+        result.status,
         143,
         "session did not report SIGTERM: {}",
-        display(&output)
+        display(&result.output)
     );
-    assert!(raw_during, "session did not enter raw terminal mode");
-    assert!(restored, "session did not restore the caller terminal mode");
+    assert!(result.raw_during, "session did not enter raw terminal mode");
+    assert!(
+        result.restored,
+        "session did not restore the caller terminal mode"
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn ctrl_c_key_interrupts_foreground_job_and_returns_to_the_shell() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".zshrc"), "PROMPT='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".zshrc"), "PROMPT='READY> '\n")
+        .expect("write a session shell startup fixture");
 
     let (output, status) = run_session_with_ctrl_c("/bin/zsh", home.path());
     assert_eq!(
@@ -363,8 +420,10 @@ fn ctrl_c_key_interrupts_foreground_job_and_returns_to_the_shell() {
 #[cfg(unix)]
 #[test]
 fn interactive_shell_keeps_isig_enabled_on_the_session_pty() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".bashrc"), "PS1='READY> '\n").unwrap();
+    let home =
+        tempfile::tempdir().expect("create a temporary home directory for this session test");
+    fs::write(home.path().join(".bashrc"), "PS1='READY> '\n")
+        .expect("write a session shell startup fixture");
     let (output, status) = run_session("/bin/bash", home.path(), b"stty -a\nexit 0\n", None);
     assert_eq!(status, 0, "Bash session failed: {}", display(&output));
     let plain = strip_sgr(&output);
@@ -379,32 +438,39 @@ fn interactive_shell_keeps_isig_enabled_on_the_session_pty() {
 }
 
 #[cfg(unix)]
+struct SessionResult {
+    output: Vec<u8>,
+    status: i32,
+    raw_during: bool,
+    restored: bool,
+}
+
+#[cfg(unix)]
 fn run_session(
     shell: &str,
     home: &Path,
     commands: &[u8],
     path_prefix: Option<&str>,
 ) -> (Vec<u8>, i32) {
-    let (output, status, _, _) = run_session_inner(shell, home, commands, path_prefix, None, None);
-    (output, status)
+    let result = run_session_inner(shell, home, commands, path_prefix, None, None);
+    (result.output, result.status)
 }
 
 #[cfg(unix)]
-fn run_session_with_term_signal(shell: &str, home: &Path) -> (Vec<u8>, i32, bool, bool) {
+fn run_session_with_term_signal(shell: &str, home: &Path) -> SessionResult {
     run_session_inner(shell, home, b"", None, Some(libc::SIGTERM), None)
 }
 
 #[cfg(unix)]
 fn run_session_with_ctrl_c(shell: &str, home: &Path) -> (Vec<u8>, i32) {
     let started = Instant::now();
-    let (output, status, _, _) =
-        run_session_inner(shell, home, b"sleep 2\n", None, None, Some(b"<1>\r\n"));
+    let result = run_session_inner(shell, home, b"sleep 2\n", None, None, Some(b"<1>\r\n"));
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "Ctrl-C did not interrupt the foreground job promptly: {}",
-        display(&output)
+        display(&result.output)
     );
-    (output, status)
+    (result.output, result.status)
 }
 
 #[cfg(unix)]
@@ -415,18 +481,19 @@ fn run_session_inner(
     path_prefix: Option<&str>,
     signal_after_prompt: Option<i32>,
     interrupt_after_echo: Option<&[u8]>,
-) -> (Vec<u8>, i32, bool, bool) {
-    std::fs::create_dir_all(home.join(".config")).unwrap();
-    std::fs::create_dir_all(home.join(".local/share")).unwrap();
-    std::fs::create_dir_all(home.join(".cache")).unwrap();
-    let pair = native_pty_system()
+) -> SessionResult {
+    fs::create_dir_all(home.join(".config")).expect("create the session test fixture directory");
+    fs::create_dir_all(home.join(".local/share"))
+        .expect("create the session test fixture directory");
+    fs::create_dir_all(home.join(".cache")).expect("create the session test fixture directory");
+    let pair = portable_pty::native_pty_system()
         .openpty(PtySize {
             rows: 24,
             cols: 80,
             pixel_width: 0,
             pixel_height: 0,
         })
-        .unwrap();
+        .expect("open a pseudo-terminal for the session test");
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_bionic-reader"));
     command.args(["session", "--shell", shell]);
     command.env("HOME", home);
@@ -453,22 +520,34 @@ fn run_session_inner(
             .to_path_buf(),
     ];
     if let Some(prefix) = path_prefix {
-        paths.insert(0, std::path::PathBuf::from(prefix));
+        paths.insert(0, PathBuf::from(prefix));
     }
-    if let Some(existing) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&existing));
+    if let Some(existing) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&existing));
     }
-    command.env("PATH", std::env::join_paths(paths).unwrap());
+    command.env(
+        "PATH",
+        env::join_paths(paths).expect("assemble the test command search path"),
+    );
     // Capture the caller's mode before the child can switch the PTY to raw mode.
     let terminal_fd = pair
         .master
         .as_raw_fd()
         .expect("PTY master has a file descriptor");
     let original_lflag = terminal_lflag(terminal_fd);
-    let mut child = pair.slave.spawn_command(command).unwrap();
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("start the reading-session wrapper");
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().unwrap();
-    let mut writer = pair.master.take_writer().unwrap();
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("clone the session PTY reader");
+    let mut writer = pair
+        .master
+        .take_writer()
+        .expect("take the session PTY writer");
     let (sender, receiver) = mpsc::channel();
     let reader_thread = thread::spawn(move || {
         let mut buffer = [0_u8; 4096];
@@ -506,7 +585,9 @@ fn run_session_inner(
             );
         }
         if !sent_prompt_probe && prompt_started.elapsed() >= Duration::from_secs(1) {
-            writer.write_all(b"\n").unwrap();
+            writer
+                .write_all(b"\n")
+                .expect("write input to the session PTY");
             sent_prompt_probe = true;
         }
         match receiver.recv_timeout(Duration::from_millis(50)) {
@@ -523,10 +604,23 @@ fn run_session_inner(
     let during_lflag = terminal_lflag(terminal_fd);
     let mut writer = Some(writer);
     if let Some(signal) = signal_after_prompt {
-        // SAFETY: process_id is the live bionic-reader wrapper under test.
-        unsafe { libc::kill(child.process_id().unwrap() as libc::pid_t, signal) };
+        let process_id = child
+            .process_id()
+            .expect("the running session process should have a process ID");
+        let result = {
+            // SAFETY: `process_id` belongs to the live session wrapper under test.
+            unsafe { libc::kill(process_id as libc::pid_t, signal) }
+        };
+        assert_eq!(
+            result, 0,
+            "deliver the requested signal to the test session"
+        );
     } else {
-        writer.as_mut().unwrap().write_all(commands).unwrap();
+        writer
+            .as_mut()
+            .expect("the session input writer should still be available")
+            .write_all(commands)
+            .expect("write commands to the session PTY");
         if interrupt_after_echo.is_none() {
             drop(writer.take());
         }
@@ -548,19 +642,32 @@ fn run_session_inner(
     while !(child_status.is_some() && output_closed) {
         if !ctrl_c_sent && interrupt_at.is_some_and(|deadline| Instant::now() >= deadline) {
             prompt_count_at_interrupt = count(&output, b"READY> ");
-            writer.as_mut().unwrap().write_all(b"\x03").unwrap();
-            writer.as_mut().unwrap().flush().unwrap();
+            writer
+                .as_mut()
+                .expect("the session input writer should still be available")
+                .write_all(b"\x03")
+                .expect("send Ctrl-C to the session PTY");
+            writer
+                .as_mut()
+                .expect("the session input writer should still be available")
+                .flush()
+                .expect("flush input to the session PTY");
             ctrl_c_sent = true;
             interrupt_at = None;
         }
         if child_status.is_none() {
-            child_status = child.try_wait().unwrap();
+            child_status = child
+                .try_wait()
+                .expect("polling the session process should succeed");
         }
         if child_status.is_none() && Instant::now() >= exit_deadline {
             if signal_after_prompt.is_some() && !forced_kill {
                 // Keep the behavioral test bounded if the wrapper fails to handle TERM.
-                // SAFETY: process_id remains the wrapper process until it is reaped.
-                unsafe { libc::kill(child.process_id().unwrap() as libc::pid_t, libc::SIGKILL) };
+                let process_id = child
+                    .process_id()
+                    .expect("the test session process should have a process ID");
+                // SAFETY: `process_id` is the wrapper process and remains live until it is reaped.
+                let _ = unsafe { libc::kill(process_id as libc::pid_t, libc::SIGKILL) };
                 forced_kill = true;
                 exit_deadline = Instant::now() + Duration::from_secs(2);
             } else {
@@ -587,7 +694,11 @@ fn run_session_inner(
                     && !exit_after_interrupt_sent
                     && count(&output, b"READY> ") > prompt_count_at_interrupt
                 {
-                    writer.as_mut().unwrap().write_all(b"exit 0\n").unwrap();
+                    writer
+                        .as_mut()
+                        .expect("the test pseudo-terminal writer should still be available")
+                        .write_all(b"exit 0\n")
+                        .expect("write input to the session PTY");
                     drop(writer.take());
                     exit_after_interrupt_sent = true;
                 }
@@ -604,20 +715,30 @@ fn run_session_inner(
         }
     }
     let _ = reader_thread.join();
-    let status = child_status.unwrap().exit_code() as i32;
+    let status = child_status
+        .expect("the session child should exit before its PTY output closes")
+        .exit_code() as i32;
     let restored_lflag = terminal_lflag(terminal_fd);
     let raw_during = during_lflag & (libc::ECHO | libc::ICANON | libc::ISIG) == 0;
     let restored = restored_lflag & (libc::ECHO | libc::ICANON | libc::ISIG)
         == original_lflag & (libc::ECHO | libc::ICANON | libc::ISIG);
     drop(writer);
-    (output, status, raw_during, restored)
+    SessionResult {
+        output,
+        status,
+        raw_during,
+        restored,
+    }
 }
 
 #[cfg(unix)]
 fn terminal_lflag(fd: i32) -> libc::tcflag_t {
-    let mut settings = std::mem::MaybeUninit::<libc::termios>::uninit();
-    // SAFETY: tcgetattr initializes termios on success; fd remains open for this helper.
-    assert_eq!(unsafe { libc::tcgetattr(fd, settings.as_mut_ptr()) }, 0);
+    let mut settings: MaybeUninit<libc::termios> = MaybeUninit::uninit();
+    let result = {
+        // SAFETY: tcgetattr initializes termios on success; fd remains open for this helper.
+        unsafe { libc::tcgetattr(fd, settings.as_mut_ptr()) }
+    };
+    assert_eq!(result, 0, "tcgetattr should inspect the open test PTY");
     // SAFETY: tcgetattr returned success.
     unsafe { settings.assume_init() }.c_lflag
 }
@@ -635,6 +756,7 @@ fn assert_contains(output: &[u8], expected: &[u8]) {
 }
 
 #[cfg(unix)]
+#[must_use]
 fn count(output: &[u8], needle: &[u8]) -> usize {
     output
         .windows(needle.len())
@@ -654,11 +776,13 @@ fn assert_no_private_markers(output: &[u8]) {
 }
 
 #[cfg(unix)]
+#[must_use]
 fn display(output: &[u8]) -> String {
     String::from_utf8_lossy(output).into_owned()
 }
 
 #[cfg(unix)]
+#[must_use]
 fn strip_sgr(output: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(output.len());
     let mut index = 0;

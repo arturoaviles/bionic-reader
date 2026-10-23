@@ -6,14 +6,16 @@
 
 #![cfg(unix)]
 
-use std::io::{Read, Write};
+use std::env;
+use std::fs::{self, Permissions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
 
 const EMPHASIZED_PROBE: &[u8] = b"\x1b[1madapte\x1b[22mrproof";
 
@@ -23,7 +25,7 @@ fn bash_it_loads_adapter_through_its_custom_plugin_loader() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("bash-it");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Bash-it test");
     let custom_plugins = home.path().join(".bash_it_custom/plugins");
     write_adapter(
         "integrations/adapters/bash-it/bionic-reader/bionic-reader.plugin.bash",
@@ -47,7 +49,7 @@ fn oh_my_bash_loads_adapter_from_custom_plugins() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("oh-my-bash");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Oh My Bash test");
     let custom = home.path().join(".oh-my-bash-custom/plugins/bionic-reader");
     write_adapter(
         "integrations/adapters/oh-my-bash/bionic-reader/bionic-reader.plugin.sh",
@@ -72,7 +74,7 @@ fn oh_my_zsh_loads_adapter_from_custom_plugins() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("oh-my-zsh");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Oh My Zsh test");
     let custom = home.path().join(".oh-my-zsh-custom/plugins/bionic-reader");
     write_adapter(
         "integrations/adapters/oh-my-zsh/bionic-reader/bionic-reader.plugin.zsh",
@@ -96,7 +98,7 @@ fn prezto_loads_adapter_as_a_user_module() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("prezto");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Prezto test");
     let module = home.path().join(".zprezto-contrib/bionic-reader");
     write_adapter(
         "integrations/adapters/prezto/bionic-reader/init.zsh",
@@ -123,7 +125,7 @@ fn zinit_loads_adapter_from_a_local_plugin_path() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("zinit");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Zinit test");
     let plugin = home.path().join(".local/share/bionic-reader-zinit");
     write_adapter(
         "integrations/adapters/zinit/bionic-reader/init.zsh",
@@ -147,11 +149,11 @@ fn fisher_installs_adapter_conf_d_file_into_interactive_startup() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("fisher");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Fisher test");
     let plugin = adapter_dir("fisher");
     let fish_config = home.path().join(".config/fish");
-    std::fs::create_dir_all(&fish_config).unwrap();
-    let fish = std::env::var_os("FISH_BIN").unwrap_or_else(|| "fish".into());
+    fs::create_dir_all(&fish_config).expect("create Fisher Fish config directory");
+    let fish = env::var_os("FISH_BIN").unwrap_or_else(|| "fish".into());
     let install = Command::new(fish)
         .arg("--command")
         .arg(format!(
@@ -185,14 +187,14 @@ fn oh_my_fish_loads_adapter_as_a_package() {
     let frameworks = frameworks_dir();
     let framework = frameworks.join("oh-my-fish");
     assert_framework_checkout(&framework);
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().expect("create temporary home for Oh My Fish test");
     let package = home.path().join(".config/omf/pkg/bionic-reader");
     write_adapter(
         "integrations/adapters/oh-my-fish/bionic-reader/init.fish",
         &package.join("init.fish"),
     );
     let fish_config = home.path().join(".config/fish");
-    std::fs::create_dir_all(&fish_config).unwrap();
+    fs::create_dir_all(&fish_config).expect("create Oh My Fish config directory");
     write_startup(
         &fish_config.join("config.fish"),
         &format!(
@@ -205,8 +207,9 @@ fn oh_my_fish_loads_adapter_as_a_package() {
     assert_framework_session("fish", home.path(), fish_bin_dir());
 }
 
+#[must_use]
 fn frameworks_dir() -> PathBuf {
-    std::env::var_os("BIONIC_READER_FRAMEWORKS_DIR")
+    env::var_os("BIONIC_READER_FRAMEWORKS_DIR")
         .map(PathBuf::from)
         .expect("set BIONIC_READER_FRAMEWORKS_DIR to official framework checkouts")
 }
@@ -219,6 +222,7 @@ fn assert_framework_checkout(path: &Path) {
     );
 }
 
+#[must_use]
 fn adapter_dir(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("integrations/adapters")
@@ -228,34 +232,43 @@ fn adapter_dir(name: &str) -> PathBuf {
 
 fn write_adapter(relative_source: &str, destination: &Path) {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_source);
-    let contents = std::fs::read(source).expect("adapter asset should be readable");
-    write_startup(destination, std::str::from_utf8(&contents).unwrap());
+    let contents = fs::read(source).expect("adapter asset should be readable");
+    let contents =
+        str::from_utf8(&contents).expect("adapter asset should contain UTF-8 shell code");
+    write_startup(destination, contents);
 }
 
 fn write_startup(path: &Path, contents: &str) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
+    let parent = path
+        .parent()
+        .expect("startup file path should have a parent directory");
+    fs::create_dir_all(parent).expect("create shell startup directory");
+    fs::write(path, contents).expect("write shell startup file");
 }
 
+#[must_use]
 fn shell_quote(path: &Path) -> String {
     let path = path.to_string_lossy();
     format!("'{}'", path.replace('\'', "'\\''"))
 }
 
+#[must_use]
 fn fish_bin_dir() -> Option<PathBuf> {
-    let fish = std::env::var_os("FISH_BIN").map(PathBuf::from)?;
+    let fish = env::var_os("FISH_BIN").map(PathBuf::from)?;
     fish.parent().map(Path::to_path_buf)
 }
 
 fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf>) {
-    let pair = native_pty_system()
+    use std::io::{Read, Write};
+
+    let pair = portable_pty::native_pty_system()
         .openpty(PtySize {
             rows: 24,
             cols: 100,
             pixel_width: 0,
             pixel_height: 0,
         })
-        .unwrap();
+        .expect("create a pseudo-terminal for the framework session test");
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_bionic-reader"));
     command.args(["session", "--shell", shell]);
     command.env("HOME", home);
@@ -276,34 +289,47 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
         home.join("bin"),
         Path::new(env!("CARGO_BIN_EXE_bionic-reader"))
             .parent()
-            .unwrap()
+            .expect("test executable should have a parent directory")
             .to_path_buf(),
     ];
     if let Some(path) = extra_path {
         paths.insert(0, path);
     }
-    if let Some(path) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&path));
+    if let Some(path) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&path));
     }
     let wrapper_bin = home.join("bin");
-    std::fs::create_dir_all(&wrapper_bin).unwrap();
+    fs::create_dir_all(&wrapper_bin).expect("create framework test wrapper directory");
     let real_cli = shell_quote(Path::new(env!("CARGO_BIN_EXE_bionic-reader")));
     let wrapper = wrapper_bin.join("bionic-reader");
-    std::fs::write(
+    fs::write(
         &wrapper,
         format!(
             "#!/bin/sh\nif [ \"$1\" = init ]; then printf 'init\\n' >> \"$BIONIC_READER_INIT_LOG\"; fi\nexec {real_cli} \"$@\"\n"
         ),
     )
-    .unwrap();
+    .expect("write framework test wrapper");
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    command.env("PATH", std::env::join_paths(paths).unwrap());
+    fs::set_permissions(&wrapper, Permissions::from_mode(0o755))
+        .expect("make framework test wrapper executable");
+    command.env(
+        "PATH",
+        env::join_paths(paths).expect("construct PATH for framework shell"),
+    );
 
-    let mut child = pair.slave.spawn_command(command).unwrap();
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn shell in framework session test");
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().unwrap();
-    let mut writer = pair.master.take_writer().unwrap();
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("clone pseudo-terminal reader");
+    let mut writer = pair
+        .master
+        .take_writer()
+        .expect("take pseudo-terminal writer");
     let (sender, receiver) = mpsc::channel();
     let reader_thread = thread::spawn(move || {
         let mut buffer = [0_u8; 4096];
@@ -326,7 +352,7 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
     while initialized_at.is_none_or(|at| at.elapsed() < Duration::from_millis(500)) {
         if Instant::now() >= startup_deadline {
             let _ = child.kill();
-            let init_calls = std::fs::read_to_string(&init_log).unwrap_or_default();
+            let init_calls = fs::read_to_string(&init_log).unwrap_or_default();
             panic!(
                 "{shell} manager did not load the adapter (init calls: {}): {}",
                 init_calls.lines().count(),
@@ -334,7 +360,7 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
             );
         }
         if initialized_at.is_none()
-            && std::fs::read_to_string(&init_log)
+            && fs::read_to_string(&init_log)
                 .is_ok_and(|calls| !calls.lines().next().unwrap_or_default().is_empty())
         {
             initialized_at = Some(Instant::now());
@@ -344,10 +370,14 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
                 // A real terminal answers fish's capability probes. This
                 // headless PTY emulates the primary device attributes reply.
                 if chunk.windows(4).any(|part| part == b"\x1b[0c") {
-                    writer.write_all(b"\x1b[?1;2c").unwrap();
+                    writer
+                        .write_all(b"\x1b[?1;2c")
+                        .expect("reply to primary device attributes probe");
                 }
                 if chunk.windows(4).any(|part| part == b"\x1b[6n") {
-                    writer.write_all(b"\x1b[1;1R").unwrap();
+                    writer
+                        .write_all(b"\x1b[1;1R")
+                        .expect("reply to cursor position report");
                 }
                 output.extend_from_slice(&chunk);
             }
@@ -363,7 +393,7 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
 
     writer
         .write_all(b"printf 'adapterproof\\n'\nprintf 'adapterproof\\n'\n")
-        .unwrap();
+        .expect("send framework verification commands");
     let mut exit_sent = false;
     let exit_deadline = Instant::now() + Duration::from_secs(15);
     let status = loop {
@@ -374,28 +404,37 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
         match receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) => {
                 if chunk.windows(4).any(|part| part == b"\x1b[0c") {
-                    writer.write_all(b"\x1b[?1;2c").unwrap();
+                    writer
+                        .write_all(b"\x1b[?1;2c")
+                        .expect("reply to primary device attributes probe");
                 }
                 if chunk.windows(4).any(|part| part == b"\x1b[6n") {
-                    writer.write_all(b"\x1b[1;1R").unwrap();
+                    writer
+                        .write_all(b"\x1b[1;1R")
+                        .expect("reply to cursor position report");
                 }
                 output.extend_from_slice(&chunk);
                 if !exit_sent && count(&output, EMPHASIZED_PROBE) >= 2 {
-                    writer.write_all(b"exit 0\n").unwrap();
+                    writer
+                        .write_all(b"exit 0\n")
+                        .expect("send exit command to framework shell");
                     exit_sent = true;
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break child.wait().unwrap(),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break child.wait().expect("wait for framework shell");
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(status) = child.try_wait().unwrap() {
+                if let Some(status) = child.try_wait().expect("poll framework shell") {
                     break status;
                 }
             }
         }
     };
-    reader_thread.join().unwrap();
-    let init_count =
-        std::fs::read_to_string(home.join("bionic-reader-init-count")).unwrap_or_default();
+    reader_thread
+        .join()
+        .expect("join framework pseudo-terminal reader");
+    let init_count = fs::read_to_string(home.join("bionic-reader-init-count")).unwrap_or_default();
     assert_eq!(
         init_count.lines().count(),
         1,
@@ -410,11 +449,12 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
     assert_eq!(
         count(&output, EMPHASIZED_PROBE),
         2,
-        "{shell} manager loaded zero or multiple adapter initializers: {}",
+        "{shell} manager should transform both adapter probes: {}",
         display(&output)
     );
 }
 
+#[must_use]
 fn count(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
         .windows(needle.len())
@@ -422,6 +462,7 @@ fn count(haystack: &[u8], needle: &[u8]) -> usize {
         .count()
 }
 
+#[must_use]
 fn display(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).replace('\x1b', "<ESC>")
 }

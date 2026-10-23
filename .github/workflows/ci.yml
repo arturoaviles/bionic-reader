@@ -47,8 +47,11 @@ jobs:
           cargo fmt --all -- --check
           cargo check --locked --all-targets
           cargo clippy --locked --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
       - name: Unit, CLI, and PTY tests
-        run: cargo test --locked --all-targets
+        run: |
+          cargo test --locked --all-targets
+          cargo test --locked --doc
       - name: Package, install, and test the Cargo crate
         run: |
           scripts/check-cargo-package.sh

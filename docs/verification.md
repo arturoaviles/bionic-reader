@@ -6,11 +6,12 @@ Validation performed on 2026-10-23. The implementation and independent standards
 
 | Check | Result |
 | --- | --- |
-| Full suite on macOS ARM64, Rust 1.85.1 | 73 passed; seven network-dependent framework tests also passed separately |
+| Full suite on macOS ARM64, Rust 1.85.1 | 75 passed; seven network-dependent framework tests also passed separately |
 | Full suite in a Debian ARM64 container, Rust 1.85.1 | 66 passed; seven framework tests run separately |
 | Actual upstream framework loaders on both platforms | All seven passed: Bash-it, Oh My Bash, Oh My Zsh, Prezto, Zinit, Fisher, Oh My Fish |
 | Minimum compiler | Rust 1.85.1 `cargo check --locked --all-targets` passed; Linux suite also ran on this compiler |
 | Rust formatting and Clippy | Passed, with warnings denied |
+| Rustdoc build and examples | Documentation built with warnings denied; the byte-transformation example passed on Rust 1.85.1 |
 | ShellCheck and Bash/Zsh/fish syntax | Passed |
 | Python Ruff, formatting, compilation, and strict mypy | Passed |
 | Node syntax and native launcher integration | Passed |
@@ -36,6 +37,10 @@ The follow-up CI review fixed both Copilot comments: the upstream Bash generator
 The first executing GitHub run exposed additional environment defects: unavailable macOS Python builds, an insufficient Go compiler for nFPM, a Linux Clippy warning, and insecure hosted-runner Zsh completion directories. CI now uses a Python version present in the official manifest for every runner architecture, the required Go compiler, direct token encoding, and corrected runner directory permissions while preserving framework security checks. Timing-sensitive CLI and split-UTF-8 expectations were replaced with deterministic timeout regressions and external stream coverage. The terminal-restoration harness now captures its baseline before the child starts. Native repository checks also fixed Debian metadata placement, content-path variable expansion, RPM 6 public-key import, and host ownership of container-created artifacts. The workflow also has pinned action commits, read-only permissions, timeouts, cancellation of superseded runs, and a separate scheduled RustSec audit.
 
 Cargo is now included in the first-release distribution coverage. The crate's explicit file list and archive audit include runtime assets, all tests, and their support files while excluding developer state and unrelated tooling. CI installs the archive across the source-install matrix and runs the full packaged-source suite on Linux x86-64. The independent Cargo standards and spec reviews reported no remaining findings. crates.io publication and name ownership remain release prerequisites.
+
+The Google Rust style review covers production code and Rust tests. [The style policy](rust-style.md) records the guide's application-code and platform exceptions. Changes include module and import conventions, public API/error/panic documentation, `must_use`, contextual test failures, borrowed configuration merging, and safe wrappers around necessary POSIX operations. `Transformer` now borrows configuration at construction and retains only its three emphasis values; a regression verifies that later configuration changes apply to a new stream. Unused per-command settings and unnecessary session configuration clones were removed. Terminal detection now uses safe standard-library APIs. Poisoned session mutexes return an error without accessing potentially inconsistent state; a regression test checks command and bypass rejection. Cargo lints enforce the mechanical rules, and CI builds Rustdoc and executes its examples. Zsh and fish completions were regenerated for the documented style values.
+
+The independent Google-style standards review found unnecessary configuration clones, stale per-command fields, and an incomplete API description of byte preservation. These were fixed and re-reviewed with no remaining findings. The separate spec review found no behavior regressions; its documentation precision note was corrected. The parent reviewed and integrated both reports, then reran all 75 tests, the seven real framework loaders, and the Rustdoc example on Rust 1.85.1.
 
 ## Release verification still required
 
