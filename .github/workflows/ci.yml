@@ -202,7 +202,7 @@ jobs:
           test -x "$zig_dir/zig"
           echo "$zig_dir" >> "$GITHUB_PATH"
           cargo +stable install cargo-zigbuild --version 0.23.4 --locked
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          go install -ldflags="-X main.version=2.47.0" github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Build signed-repository candidates and install in distro containers
         run: scripts/package-manager-install-smoke.sh
