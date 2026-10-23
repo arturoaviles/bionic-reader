@@ -2,7 +2,7 @@
 
 Bionic Reader is a local Rust command-line program that emphasizes the beginnings of words in text streams and opt-in interactive shell sessions. It transforms text on your machine; it does not send text to a service. It preserves the input text and layout and does not promise a reading-speed improvement.
 
-**Install from this repository for now.** Bionic Reader has not been submitted to Homebrew, PyPI, npm, apt, dnf, pacman, Snap, or any other package registry. The package-generation scripts produce local candidates; registry install commands are not available yet.
+**Install from this repository for now.** Bionic Reader has not been submitted to crates.io, Homebrew, PyPI, npm, apt, dnf, pacman, Snap, or any other package registry. The package-generation scripts produce local candidates; registry install commands are not available yet.
 
 ## How to install
 
@@ -76,6 +76,24 @@ cargo run --locked -- -t 'Try Bionic Reader before installing.'
 Cargo installs the executable. To activate automatic reading sessions, follow either [standalone shell setup](#standalone-shell-setup) or [framework setup](#shell-framework-setup) below. Neither installation nor activation requires publishing a package.
 
 To update later, pull the branch you installed and rerun `cargo install --path . --locked --force`. After PR #2 merges, switch your checkout to `main` before pulling updates.
+
+## Install with Cargo
+
+Cargo is supported on macOS and Linux with Rust 1.85.1 or newer and the C build tools listed above. The source installation in the steps above uses Cargo already. To install directly from the public Git repository without a separate checkout, run:
+
+```sh
+cargo install --git https://github.com/arturoaviles/bionic-reader.git --branch feat/bionic-reader --locked bionic-reader
+```
+
+The branch selects the implementation until PR #2 merges. After it merges, omit `--branch feat/bionic-reader` to install from `main`. Then follow [the PATH instructions](#4-make-the-executable-available-to-your-shell) and [verify the installation](#5-verify-the-installation). Git installation installs the executable; clone the repository if you also want to copy framework adapters or completion files as described below. Shell initialization and completion generation are built into the executable.
+
+**crates.io installation is planned but not available yet.** After the first crate is published, the registry command will be:
+
+```sh
+cargo install bionic-reader --locked
+```
+
+Use `cargo uninstall bionic-reader` to remove a Cargo installation. Keep `--locked` on installs so Cargo uses the dependencies validated with that version. Maintainers can build and verify the source archive with `cargo package --locked`; see [Cargo crate validation](CONTRIBUTING.md#cargo-crate-validation).
 
 ## Usage examples
 
@@ -332,7 +350,7 @@ The generated files are also in `completions/`. Source `completions/bionic-reade
 
 The candidate build matrix targets macOS 11 or newer and Linux x86-64/ARM64 with glibc 2.28 or newer, plus x86-64/ARM64 musl Linux. CI currently runs native package-manager install smokes on Linux x86-64 GNU; the other listed targets receive candidate builds, not matching-host installation coverage. Release support requires artifact-level tests on matching hosts.
 
-Scripts under `scripts/` produce local candidate artifacts for Homebrew, apt, dnf, pacman, classic Snap, pip/uv wheels, and npm/Yarn/pnpm tarballs. They do not publish to registries or create publisher keys. Linux repository-generation scripts sign package/index metadata using an existing key explicitly supplied to the script; they never generate a publisher identity. The installation smokes use only a temporary key inside disposable test containers. External registry installation, repository hosting and key distribution, upgrade/uninstall validation, and Snap classic-confinement approval remain release gates.
+Scripts under `scripts/` produce local candidate artifacts for Cargo/crates.io, Homebrew, apt, dnf, pacman, classic Snap, pip/uv wheels, and npm/Yarn/pnpm tarballs. Cargo candidates contain Rust source and compile during installation; other routes use the native binary or their existing packaging wrappers. They do not publish to registries or create publisher keys. Linux repository-generation scripts sign package/index metadata using an existing key explicitly supplied to the script; they never generate a publisher identity. The installation smokes use only a temporary key inside disposable test containers. External registry installation, repository hosting and key distribution, upgrade/uninstall validation, and Snap classic-confinement approval remain release gates.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for candidate-build commands, required tools, and checks, and [the verification record](docs/verification.md) for executed tests and remaining release gates. The implementation and local candidate tooling are available in this checkout; no public package availability is claimed.
 

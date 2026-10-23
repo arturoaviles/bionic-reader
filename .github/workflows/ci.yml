@@ -49,6 +49,23 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
       - name: Unit, CLI, and PTY tests
         run: cargo test --locked --all-targets
+      - name: Package, install, and test the Cargo crate
+        run: |
+          scripts/check-cargo-package.sh
+          package_manifest=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
+          import json, sys
+          metadata = json.load(sys.stdin)
+          package = next(package for package in metadata["packages"] if package["name"] == "bionic-reader")
+          print("{}/package/{}-{}/Cargo.toml".format(metadata["target_directory"], package["name"], package["version"]))
+          ')
+          cargo test --locked --all-targets --manifest-path "$package_manifest"
+      - name: Upload Cargo crate candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bionic-reader-cargo-crate
+          path: target/package/*.crate
+          if-no-files-found: error
+          retention-days: 14
       - name: Check generated completion files
         run: scripts/check-completions.sh target/debug/bionic-reader
       - name: Test offline npm, Yarn PnP, and pnpm installs
@@ -297,3 +314,5 @@ jobs:
         run: |
           cargo uninstall --root "$RUNNER_TEMP/bionic-reader-install" bionic-reader
           test ! -e "$RUNNER_TEMP/bionic-reader-install/bin/bionic-reader"
+      - name: Package, install, and use the Cargo crate
+        run: scripts/check-cargo-package.sh

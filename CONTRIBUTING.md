@@ -18,7 +18,7 @@ The test suite includes unit, CLI, and PTY/session coverage. Session tests need 
 
 ## Build, install, and use checks
 
-The `source-install` CI job installs the checkout with Cargo into a temporary root, exercises the installed binary, and uninstalls it. It covers Linux and macOS on x86-64 and ARM64 with Rust 1.85.1, plus current stable Rust on Linux x86-64. The six-target candidate build matrix also extracts each native archive and exercises its executable on the matching host architecture.
+The `source-install` CI job installs the checkout with Cargo into a temporary root, exercises the installed binary, and uninstalls it. It covers Linux and macOS on x86-64 and ARM64 with Rust 1.85.1, plus current stable Rust on Linux x86-64. Each entry also packages a `.crate`, installs its extracted source outside the checkout, runs the installed CLI/PTY checks, and uninstalls it. The six-target candidate build matrix also extracts each native archive and exercises its executable on the matching host architecture.
 
 To reproduce the installation check without changing your normal Cargo installation:
 
@@ -33,6 +33,26 @@ rm -rf "$install_root"
 The checker requires Python 3.9 or newer and `/bin/bash`. It isolates HOME and XDG configuration and verifies text/stdin behavior, ANSI output, configuration precedence, shell initialization and completions, session controls, and a real PTY reading session. Pass the actual installed binary path; the checker does not substitute a build-tree executable.
 
 Workflow changes are checked with [actionlint](https://github.com/rhysd/actionlint) 1.7.12, including GitHub expression contexts and inline shell scripts. Run `actionlint` locally when editing `.github/workflows/`. Actions are pinned to verified commit SHAs. CI has read-only repository permissions, timeouts, and cancellation of superseded runs. The separate dependency-security workflow runs Cargo audit on dependency changes, weekly after merge, and on manual dispatch.
+
+## Cargo crate validation
+
+Cargo is a first-release distribution route through crates.io. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling.
+
+From a clean checkout, run:
+
+```sh
+scripts/check-cargo-package.sh
+```
+
+This runs Cargo's verified `package --locked`, checks the archive contents, extracts the `.crate` to a temporary directory, installs it with Cargo, exercises the installed binary and a reading session, and uninstalls it. The archive remains under Cargo's `target/package/` directory (or the target directory selected by `CARGO_TARGET_DIR`). CI covers the same five OS/architecture/toolchain combinations as source installation and runs the full test suite against the packaged source on Linux x86-64. That job also uploads the `.crate` as a workflow artifact.
+
+Before publishing a release, check crates.io name ownership and credentials, then run the final preflight:
+
+```sh
+cargo publish --dry-run --locked
+```
+
+The dry run does not upload the crate. No workflow publishes it automatically. Source/Git installation works before registry publication; `cargo install bionic-reader --locked` requires an actual crates.io release. See the official [Cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html), [install](https://doc.rust-lang.org/cargo/commands/cargo-install.html), and [publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html) documentation.
 
 ## Candidate binaries
 

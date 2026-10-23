@@ -6,6 +6,22 @@ rust-version = "1.85.1"
 description = "Configurable bionic reading for text streams and interactive shells"
 license = "MIT"
 repository = "https://github.com/arturoaviles/bionic-reader"
+readme = "README.md"
+keywords = ["bionic-reading", "cli", "terminal", "text"]
+categories = ["command-line-utilities", "text-processing"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE",
+    "src/**",
+    "tests/**",
+    "completions/**",
+    "integrations/**",
+    "packaging/config.example.toml",
+    "packaging/npm/bin/bionic-reader.js",
+    "scripts/create_archive.py",
+]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
