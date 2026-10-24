@@ -514,24 +514,6 @@ impl Transformer {
                 continue;
             }
 
-            // When malformed UTF-8 lead bytes arrive in succession, discard
-            // the now-definitely-invalid prefix before rescanning it as part
-            // of an open word. This prefix is intentionally limited to three
-            // bytes: validation work stays constant even for long malformed
-            // runs, while an earlier word is handled by `process_available`.
-            if let Some(invalid_prefix_len) =
-                malformed_utf8_prefix_to_emit(&self.pending[..pending_before], appended)
-            {
-                output.extend_from_slice(&self.pending[..invalid_prefix_len]);
-                self.pending.drain(..invalid_prefix_len);
-                self.pending_c1_shielded =
-                    self.pending_c1_shielded.saturating_sub(invalid_prefix_len);
-                self.pending_word = false;
-                self.pending_control = None;
-                output.extend(self.process_available());
-                continue;
-            }
-
             if !self.pending_word
                 || appended.contains(&0x1b)
                 || !chunk_can_extend_word_after_pending(
@@ -638,7 +620,6 @@ impl Transformer {
                 &tokens,
                 self.segmenter.as_ref(),
             ))
-            .chain(trailing_raw_candidate_start(&tokens))
             .min();
         self.pending_word = candidate.is_some();
         let safe_token_count = candidate.unwrap_or(tokens.len());
@@ -1636,25 +1617,6 @@ fn trailing_candidate_start(units: &[Grapheme]) -> Option<usize> {
     Some(units[cursor].start_token)
 }
 
-fn trailing_raw_candidate_start(tokens: &[Token]) -> Option<usize> {
-    let last = tokens
-        .iter()
-        .rposition(|token| !matches!(token.kind, TokenKind::Control(_)))?;
-    if !matches!(tokens[last].kind, TokenKind::Raw) {
-        return None;
-    }
-    let mut start = last;
-    while start > 0
-        && matches!(
-            tokens[start - 1].kind,
-            TokenKind::Raw | TokenKind::Control(_)
-        )
-    {
-        start -= 1;
-    }
-    Some(start)
-}
-
 #[must_use]
 fn trailing_segmenter_candidate(tokens: &[Token], segmenter: &dyn WordSegmenter) -> Option<usize> {
     let (visible, char_map) = visible_text(tokens);
@@ -1761,39 +1723,6 @@ fn chunk_can_extend_word_after_pending(pending: &[u8], appended: &[u8], open_wor
     }
 
     false
-}
-
-fn malformed_utf8_prefix_to_emit(pending: &[u8], appended: &[u8]) -> Option<usize> {
-    let suffix_start = incomplete_utf8_suffix_start(pending)?;
-    if suffix_start == 0 || suffix_start > 3 || appended.is_empty() {
-        return None;
-    }
-
-    let invalid_prefix = &pending[..suffix_start];
-    // Restrict this fast path to a tiny, wholly invalid, non-control prefix.
-    // This avoids both re-scanning growing malformed runs and interpreting a
-    // C1 byte or a valid scalar as ordinary text.
-    if invalid_prefix.iter().any(|byte| *byte < 0xa0) {
-        return None;
-    }
-    // Include the first byte of the incomplete suffix: that byte already
-    // proves the preceding prefix invalid (for example, `CC CC`).
-    let prefix_probe = &pending[..=suffix_start];
-    let error = str::from_utf8(prefix_probe).err()?;
-    if error.valid_up_to() != 0 || error.error_len().is_none() {
-        return None;
-    }
-
-    let suffix = &pending[suffix_start..];
-    let mut probe = [0; 4];
-    let probe_len = suffix.len().checked_add(1)?;
-    if probe_len > probe.len() {
-        return None;
-    }
-    probe[..suffix.len()].copy_from_slice(suffix);
-    probe[suffix.len()] = appended[0];
-    let error = str::from_utf8(&probe[..probe_len]).err()?;
-    (error.valid_up_to() == 0 && error.error_len().is_some()).then_some(suffix_start)
 }
 
 fn is_incomplete_utf8(input: &[u8]) -> bool {
@@ -3294,6 +3223,59 @@ mod tests {
         input.extend(std::iter::repeat_n(0xcc, 32_768));
 
         assert_bytewise_scan_work_is_linear(&input, &settings);
+    }
+
+    #[test]
+    fn raw_continuation_runs_are_emitted_without_resegmenting_the_suffix() {
+        let settings = Settings {
+            every: 7,
+            min_word_length: 1,
+            fraction: 1.0,
+            ..Settings::default()
+        };
+        let mut input = vec![0, b'a'];
+        input.extend(std::iter::repeat_n(0xcc, 9_875));
+        input.extend(std::iter::repeat_n(0x8b, 52));
+        input.extend(std::iter::repeat_n(0xcc, 22_893));
+        assert_eq!(input.len(), 32_822);
+
+        assert_bytewise_scan_work_is_linear(&input, &settings);
+        let expected = super::transform(&input, &settings, true);
+        assert!(expected.starts_with(b"\0\x1b[1ma"));
+        for width in [2, 3, 7, 127, input.len()] {
+            let mut renderer = Transformer::new(&settings, true);
+            let mut actual = Vec::new();
+            for chunk in input.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected, "width={width}");
+        }
+    }
+
+    #[test]
+    fn neighboring_raw_c1_bytes_do_not_split_valid_utf8_scalars_across_chunks() {
+        let settings = Settings {
+            min_word_length: 1,
+            fraction: 1.0,
+            ..Settings::default()
+        };
+        let inputs: [&[u8]; 2] = [
+            b"a\xcc\x8b\x8a\x8b\x8c\xcc\x8b next",
+            b"a\xc2\x8b\xcc\x8b\x8a\x8b\x8c next",
+        ];
+        for input in inputs {
+            let expected = super::transform(input, &settings, true);
+            for width in [1, 2, 3, 7, input.len()] {
+                let mut renderer = Transformer::new(&settings, true);
+                let mut actual = Vec::new();
+                for chunk in input.chunks(width) {
+                    actual.extend(renderer.push(chunk));
+                }
+                actual.extend(renderer.finish());
+                assert_eq!(actual, expected, "width={width}, input={input:?}");
+            }
+        }
     }
 
     #[test]

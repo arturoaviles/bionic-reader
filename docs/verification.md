@@ -76,26 +76,26 @@ Strengthened framework tests start the user's interactive shell and let the adap
 
 | Check | Current local result |
 | --- | --- |
-| Complete Rust 1.85.1 suite, macOS ARM64 | 290 passed, including 150 library tests and 62 document integration tests |
-| Complete Rust 1.85.1 suite, Linux ARM64 | 293 passed, including the Linux-only input/output and descriptor-limit failures |
+| Complete Rust 1.85.1 suite, macOS ARM64 | 292 passed, including 152 library tests and 62 document integration tests |
+| Complete Rust 1.85.1 suite, Linux ARM64 | 295 passed, including the Linux-only input/output and descriptor-limit failures |
 | Real upstream framework startup workflows | All seven passed with both coverage compilers |
 | Rustdoc examples and documentation | Five examples passed; documentation built with warnings denied |
 | Generated properties | Six properties passed with 4,096 cases each |
-| Sanitizer fuzzing with varied fixation settings | The recovered CI input passed individually; 20,779 inputs completed in 62 seconds without a failure |
+| Sanitizer fuzzing with varied fixation settings | The recovered timeout input completed in 212 ms; a fresh CI-seed corpus completed 890 inputs in 62 seconds without a failure |
 | Makefile verification | `make verify` passed, including both Rust workspaces, completion drift, and distribution source checks |
 | Zsh completion | Real ZLE completion passed for subcommands, options, and option values |
-| Linux release streaming memory | 40 MiB input; 11,935,744-byte peak RSS and 7,380,992-byte growth after warmup |
+| Linux release streaming memory | 40 MiB input; 11,935,744-byte peak RSS and 7,196,672-byte growth after warmup |
 | RustSec lockfile audits | No reported advisories in the 117-dependency application lockfile or 105-dependency fuzz lockfile using the cached advisory database; CI refreshes it |
 
 Terminal workflows cover reader navigation/search/settings, resizing, restoration after signals, shell job control, interrupted bypass recovery, and startup cleanup. Linux tests apply descriptor limits only to child processes and check five failure stages: integration preparation, PTY creation, PTY read/write setup, and Bash startup preparation. They verify diagnostics, terminal restoration, and temporary-file cleanup. Executable tests also exercise `/dev/full`, unreadable stdin, configuration errors, saved-file pipelines, format conversion, and malformed input.
 
 Coverage-driven regressions fixed raw and UTF-8-encoded C1 controls receiving emphasis inside escape sequences, UTF-8 continuation bytes mistaken for C1 terminators, oversized/split control boundaries, malformed intermediate escapes, repeated rescanning of long controls and Unicode suffixes, and alphabetic combining marks without a base letter. Operation-count tests bound parser work independently of machine speed. Markdown frequency now remains repeat-safe when generated strong prefixes divide a word across parser events; a generated property varies frequency, minimum length, and fixation strength.
 
-CI subsequently found a malformed UTF-8 suffix after long combining-mark runs that differed between bytewise and whole-input rendering. The fix distinguishes incomplete scalars from definitively invalid bytes, releases only a bounded invalid prefix, and retains linear scan-work bounds. Its 70,007-byte reproducer and repeated malformed-lead regression run as unit tests and seed the sanitizer fuzzer. Ubuntu's global Zsh startup also prompted before the isolated completion configuration; the completion test now skips global startup files while loading its own real ZLE configuration. Additional tests cover concurrent session controls and shutdown, the no-terminal diagnostic, Markdown entity spelling, code opt-in escaping, invalid document UTF-8, and partial output followed by a read failure.
+CI subsequently found a malformed UTF-8 suffix after long combining-mark runs that differed between bytewise and whole-input rendering, then a raw-byte mutation that caused repeated suffix scans. The fix distinguishes incomplete scalars from definitively invalid bytes and emits complete raw tokens through the parser's complete-input boundary. Incomplete UTF-8 remains buffered. The 70,007-byte mismatch and 32,822-byte timeout reproducers run as unit tests with chunk-equality and linear scan-work bounds and seed the sanitizer fuzzer. Ubuntu's global Zsh startup also prompted before the isolated completion configuration; the completion test now skips global startup files while loading its own real ZLE configuration. Additional tests cover concurrent session controls and shutdown, the no-terminal diagnostic, Markdown entity spelling, code opt-in escaping, invalid document UTF-8, and partial output followed by a read failure.
 
 The property configuration previously fixed the count at 256 even when a larger `PROPTEST_CASES` was requested. It now honors that variable, and the current six-property run actually used 4,096 cases per property. CI sets the same count.
 
-The first measured minimum-compiler baseline was **84.09% line coverage**. The clean final Rust 1.85.1 measurement is **93.56% lines**, **88.50% regions**, and **88.68% functions**. The separate nightly-2026-10-22 measurement is **92.85% lines**, **91.69% regions**, **89.03% functions**, and **80.54% branches**. Both include all seven real framework startup workflows and use cargo-llvm-cov 0.9.1. Different compiler instrumentation produces different denominators; these percentages are not interchangeable. No production module is omitted.
+The first measured minimum-compiler baseline was **84.09% line coverage**. The clean final Rust 1.85.1 measurement is **93.57% lines**, **88.46% regions**, and **88.66% functions**. The separate nightly-2026-10-22 measurement is **92.86% lines**, **91.73% regions**, **89.01% functions**, and **80.58% branches**. Both include all seven real framework startup workflows and use cargo-llvm-cov 0.9.1. Different compiler instrumentation produces different denominators; these percentages are not interchangeable. No production module is omitted.
 
 | Rust source | Rust 1.85.1 line coverage |
 | --- | --- |
@@ -107,9 +107,9 @@ The first measured minimum-compiler baseline was **84.09% line coverage**. The c
 | `session.rs` | 87.95% |
 | `settings.rs` | 99.42% |
 | `shell.rs` | 100.00% |
-| `transformer.rs` | 95.74% |
+| `transformer.rs` | 95.79% |
 
-**The requested 100% target remains unmet.** The MSRV report has 662 uncovered lines; nightly has 678 uncovered lines and 353 uncovered branches. Most remaining paths concern operating-system/worker failures and defensive parser diagnostics. Inline unit-test code is also represented in the compiler's source-file measurements. Passing tests does not establish that every fault or branch has been exercised.
+**The requested 100% target remains unmet.** The MSRV report has 660 uncovered lines; nightly has 676 uncovered lines and 348 uncovered branches. Most remaining paths concern operating-system/worker failures and defensive parser diagnostics. Inline unit-test code is also represented in the compiler's source-file measurements. Passing tests does not establish that every fault or branch has been exercised.
 
 CI publishes the actual measurements and the open 100% target in its job summary, uploads HTML/JSON/LCOV/uncovered-line artifacts, and enforces transitional floors of 92% lines, 91% regions, 88% functions, and 80% branches. These floors are regression gates, not completion of the target. The fuzzer has a ten-second per-input timeout and uploads failure inputs; malformed-byte, multilingual, C1/ANSI, Markdown, combining-mark, and oversized-control seeds reproduce known edge cases.
 

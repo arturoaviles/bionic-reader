@@ -224,6 +224,7 @@ jobs:
               b'\0/\xd8\x94',
               b'\0a' + b'\xcc\x81' * 1327 + b'\xcc' + b'\xcc\x81' * 22210 + b'\xcc' + b'\xcc\x81' * 11462 + b' next',
               b'\0a' + b'\xcc' * 32768,
+              b'\0a' + b'\xcc' * 9875 + b'\x8b' * 52 + b'\xcc' * 22893,
           ]
           for index, seed in enumerate(seeds):
               (corpus / f'seed-{index}').write_bytes(seed)
