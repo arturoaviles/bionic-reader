@@ -11,7 +11,7 @@ temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 source_url=$(python3 -c 'from pathlib import Path; print(Path.cwd().as_uri())')
 revision=$(git rev-parse HEAD)
-cargo install --git "$source_url" --rev "$revision" --locked --root "$temporary/install"
+cargo install --git "$source_url" --rev "$revision" --locked --root "$temporary/install" bionic-reader
 python3 scripts/check-installed-cli.py "$temporary/install/bin/bionic-reader"
 cargo uninstall --root "$temporary/install" bionic-reader
 [[ ! -e $temporary/install/bin/bionic-reader ]]

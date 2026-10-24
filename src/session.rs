@@ -2161,7 +2161,7 @@ mod tests {
             } else {
                 let error = result.expect_err("reject invalid response");
                 if index == 1 {
-                    assert_eq!(error.to_string(), "fixture rejection");
+                    assert_eq!(format!("{error:#}"), "fixture rejection");
                 }
             }
             server.join().expect("join response fixture");

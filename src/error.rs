@@ -283,7 +283,7 @@ mod tests {
             std::io::Error::other("private detail"),
         )
         .context("public explanation".to_owned());
-        assert_eq!(error.to_string(), "public explanation");
+        assert_eq!(format!("{error:#}"), "public explanation");
         assert_eq!(error.io_kind(), Some(std::io::ErrorKind::Other));
         assert!(std::error::Error::source(&error).is_some());
     }

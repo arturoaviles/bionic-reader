@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import os
 import pty
 import select
 import shlex
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 from pathlib import Path
 from typing import Mapping, NamedTuple, NoReturn, Optional, Sequence
@@ -426,6 +429,8 @@ def run_pty_check(binary: Path, root: Path, path: str) -> None:
     pid, master = pty.fork()
     if pid == 0:
         try:
+            # pty.fork() otherwise inherits a zero-sized window on Linux.
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             os.chdir(work)
             os.execve(
                 str(binary),
