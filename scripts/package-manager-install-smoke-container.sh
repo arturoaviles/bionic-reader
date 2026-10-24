@@ -38,6 +38,20 @@ create_smoke_key() {
   }
 }
 
+remove_package() {
+  case "$manager" in
+    debian) apt-get remove --yes bionic-reader ;;
+    fedora) dnf remove --assumeyes bionic-reader ;;
+    archlinux) pacman --config "$pacman_conf" --remove --noconfirm bionic-reader ;;
+  esac
+  # Bash otherwise reports its cached command path even after the file is removed.
+  hash -r
+  if command -v bionic-reader >/dev/null 2>&1; then
+    printf 'Uninstall left bionic-reader on PATH\n' >&2
+    exit 1
+  fi
+}
+
 verify_installed_package() {
   local actual_version
   actual_version=$(bionic-reader --version)
@@ -141,22 +155,23 @@ esac
 verify_installed_package
 python3 "$repo_root/scripts/check-installed-cli.py" "$(command -v bionic-reader)"
 # Exercise the README's direct local-file installation as well as the signed repository.
+remove_package
 case "$manager" in
   debian)
-    apt-get remove --yes bionic-reader
+    # APT may prefer a repository copy of the same version over a supplied file.
+    rm /etc/apt/sources.list.d/bionic-reader.sources
+    apt-get update
     packages=(/packages/bionic-reader*.deb)
     [[ ${#packages[@]} -eq 1 && -f ${packages[0]} ]]
     apt-get install --yes --no-install-recommends "${packages[0]}"
     ;;
   fedora)
-    dnf remove --assumeyes bionic-reader
     packages=(/packages/bionic-reader*.rpm)
     [[ ${#packages[@]} -eq 1 && -f ${packages[0]} ]]
     # These are unsigned files just built from the checkout, outside a signed repository.
-    dnf install --assumeyes --nogpgcheck "${packages[0]}"
+    dnf --disablerepo=bionic-reader install --assumeyes --nogpgcheck "${packages[0]}"
     ;;
   archlinux)
-    pacman --config "$pacman_conf" --remove --noconfirm bionic-reader
     packages=(/packages/bionic-reader*.pkg.tar.zst)
     [[ ${#packages[@]} -eq 1 && -f ${packages[0]} ]]
     pacman --config "$pacman_conf" --upgrade --noconfirm "${packages[0]}"
@@ -164,13 +179,5 @@ case "$manager" in
 esac
 verify_installed_package
 python3 "$repo_root/scripts/check-installed-cli.py" "$(command -v bionic-reader)"
-case "$manager" in
-  debian) apt-get remove --yes bionic-reader ;;
-  fedora) dnf remove --assumeyes bionic-reader ;;
-  archlinux) pacman --config "$pacman_conf" --remove --noconfirm bionic-reader ;;
-esac
-if command -v bionic-reader >/dev/null 2>&1; then
-  printf 'Uninstall left bionic-reader on PATH\n' >&2
-  exit 1
-fi
+remove_package
 printf '%s signed-repository and local-file install/use/uninstall checks passed for %s\n' "$manager" "$expected_version"

@@ -93,7 +93,7 @@ Use `cargo uninstall bionic-reader` to remove a Cargo installation. Keep `--lock
 
 ## Install with the other package managers from this repository
 
-Choose one route below after cloning and selecting the implementation branch above. Run build commands from the repository root in Bash or Zsh. These routes build the current checkout and install local files; they do not require a Bionic Reader registry package or GitHub release. Upstream build tools and Rust dependencies still need network access on their first installation.
+Choose one route below after cloning and selecting the implementation branch above. The packaging helpers require Python 3.9 or newer; Linux users also need their distribution's Python venv support for the Python build-tool environments. Run build commands from the repository root in Bash or Zsh. These routes build the current checkout and install local files; they do not require a Bionic Reader registry package or GitHub release. Upstream build tools and Rust dependencies still need network access on their first installation.
 
 Set the checkout's version and native target once:
 
