@@ -1,0 +1,32 @@
+{
+  "name": "@arturoaviles/bionic-reader",
+  "version": "@VERSION@",
+  "description": "Local word-prefix emphasis for text streams and terminal sessions",
+  "license": "MIT",
+  "homepage": "https://github.com/arturoaviles/bionic-reader",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arturoaviles/bionic-reader.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "bionic-reader": "bin/bionic-reader.js"
+  },
+  "files": [
+    "bin/bionic-reader.js",
+    "share/bionic-reader/config.example.toml",
+    "share/bionic-reader/completions/**",
+    "share/bionic-reader/integrations/**",
+    "LICENSE"
+  ],
+  "optionalDependencies": {
+    "@arturoaviles/bionic-reader-darwin-x64": "@VERSION@",
+    "@arturoaviles/bionic-reader-darwin-arm64": "@VERSION@",
+    "@arturoaviles/bionic-reader-linux-x64-gnu": "@VERSION@",
+    "@arturoaviles/bionic-reader-linux-x64-musl": "@VERSION@",
+    "@arturoaviles/bionic-reader-linux-arm64-gnu": "@VERSION@",
+    "@arturoaviles/bionic-reader-linux-arm64-musl": "@VERSION@"
+  }
+}

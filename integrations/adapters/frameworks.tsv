@@ -1,0 +1,7 @@
+bash-it	https://github.com/Bash-it/bash-it.git	86b6da1cc1b34e77e6b199960e23b8e2822f0185
+oh-my-bash	https://github.com/ohmybash/oh-my-bash.git	4d86087c31b867a30ddaaea270804839b0988e74
+oh-my-zsh	https://github.com/ohmyzsh/ohmyzsh.git	2100c630ba4bd67bb48802c3e7da893a4fdaa1a0
+prezto	https://github.com/sorin-ionescu/prezto.git	cff2d01871425b1b80710f8ec6a475c5a53145b4
+zinit	https://github.com/zdharma-continuum/zinit.git	f466c8805d8890f76bed8cf0972e0f7310fc5fc9
+fisher	https://github.com/jorgebucaran/fisher.git	791da644d33d392216f6b1a9b5fc1e470db6d7f2
+oh-my-fish	https://github.com/oh-my-fish/oh-my-fish.git	043699af326b1d4fcfaf1b2e591d830d1d53506a

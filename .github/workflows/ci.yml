@@ -1,0 +1,535 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.85.1
+      - name: Install session test shells
+        run: sudo apt-get update && sudo apt-get install --yes fish zsh
+      - name: Install pinned Corepack in a temporary tool prefix
+        run: |
+          npm --cache "$RUNNER_TEMP/corepack-npm-cache" install \
+            --prefix "$RUNNER_TEMP/bionic-reader-node-tools" \
+            --ignore-scripts --no-save --no-audit --no-fund --package-lock=false \
+            corepack@0.36.0
+          echo "$RUNNER_TEMP/bionic-reader-node-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Check and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
+      - name: Unit, CLI, and PTY tests
+        run: |
+          cargo test --locked --all-targets
+          cargo test --locked --doc
+      - name: Verify bounded memory with a 40 MiB transformed stream
+        run: |
+          cargo build --locked --release --bin bionic-reader
+          python3 scripts/check-stream-memory.py target/release/bionic-reader
+      - name: Package, install, and test the Cargo crate
+        run: |
+          scripts/check-cargo-package.sh
+          package_manifest=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
+          import json, sys
+          metadata = json.load(sys.stdin)
+          package = next(package for package in metadata["packages"] if package["name"] == "bionic-reader")
+          print("{}/package/{}-{}/Cargo.toml".format(metadata["target_directory"], package["name"], package["version"]))
+          ')
+          cargo test --locked --all-targets --manifest-path "$package_manifest"
+      - name: Upload Cargo crate candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bionic-reader-cargo-crate
+          path: target/package/*.crate
+          if-no-files-found: error
+          retention-days: 14
+      - name: Check generated completion files
+        run: scripts/check-completions.sh target/debug/bionic-reader
+      - name: Test offline npm, Yarn PnP, and pnpm installs
+        run: scripts/check-node-package-installs.sh target/debug/bionic-reader
+
+  coverage:
+    name: Line, branch, and end-to-end coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/coverage-build
+      CARGO_LLVM_COV_TARGET_DIR: ${{ github.workspace }}/target/coverage-build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install pinned coverage tools and terminal shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fish zsh
+          rustup toolchain install nightly-2026-10-22 --profile minimal --component llvm-tools-preview
+          rustup default nightly-2026-10-22
+          cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: Measure unit, property, CLI, file-pipeline, and terminal workflows
+        run: cargo llvm-cov --branch --locked --all-targets --no-report
+      - name: Include actual upstream framework startup workflows
+        run: |
+          while IFS= read -r directory; do
+            sudo chmod go-w "$directory"
+          done < <(zsh -fc 'autoload -Uz compaudit; compaudit || true')
+          eval "$(cargo llvm-cov show-env --branch --sh)"
+          scripts/check-frameworks.sh
+      - name: Export measured coverage and uncovered lines
+        if: always()
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --json --output-path target/coverage/coverage.json
+          cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --lcov --output-path target/coverage/lcov.info
+          cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --html --output-dir target/coverage
+          cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --show-missing-lines | tee target/coverage/summary.txt
+      - name: Prevent coverage regressions while closing the 100 percent target
+        run: cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --fail-under-lines 85 --fail-under-regions 80 --fail-under-functions 80
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-reports
+          path: target/coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+  rust-maintenance:
+    name: Rust feature and dependency checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned verification toolchain and tools
+        run: |
+          rustup toolchain install nightly-2026-10-22 --profile minimal
+          cargo +nightly-2026-10-22 install cargo-hack --version 0.6.45 --locked
+          cargo +nightly-2026-10-22 install cargo-udeps --version 0.1.61 --locked
+          rustup toolchain install 1.85.1 --profile minimal
+      - name: Check feature combinations on the minimum compiler
+        run: cargo +1.85.1 hack check --locked --feature-powerset --all-targets
+      - name: Check for unused dependencies
+        run: cargo +nightly-2026-10-22 udeps --locked --all-targets --all-features
+
+  miri:
+    name: Miri byte-stream checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Miri toolchain
+        run: rustup toolchain install nightly-2026-10-22 --profile minimal --component miri --component rust-src
+      - name: Interpret UTF-8 and ANSI boundary regressions
+        # Real PTYs, processes, and signal handling remain covered by native integration tests.
+        run: |
+          cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::chunk_boundaries_inside_utf8_and_sgr_do_not_change_output -- --exact
+          cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::malformed_bytes_are_preserved_while_surrounding_words_transform -- --exact
+
+  fuzz:
+    name: Unicode, ANSI, and document fuzz regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned fuzz toolchain and driver
+        run: |
+          rustup toolchain install nightly-2026-10-22 --profile minimal
+          cargo +nightly-2026-10-22 install cargo-fuzz --version 0.13.2 --locked
+      - name: Fuzz byte streams and document rendering with sanitizers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          corpus = Path('fuzz/corpus/byte_stream')
+          corpus.mkdir(parents=True, exist_ok=True)
+          seeds = [
+              'café cafe\u0301 niño 你好世界 日本語 ภาษาไทย 👨‍👩‍👧‍👦'.encode(),
+              b'\x1b[2;31mreading\x1b[22m \x1b[4:0mword \x1b[4:3mtext\x1b[0m',
+              b'\x1b]52;c;YXVkaXQ=\x07before \x1b]8;;https://example.test\x1b\\link\x1b]8;;\x1b\\',
+              b'# Heading\n\n[link](javascript:alert(1)) `code`\n```rust\nlet value = 1;\n```\n',
+              b'word\xff\xfe\r\n\x1b[',
+              b'a' * 70000 + b' next',
+          ]
+          for index, seed in enumerate(seeds):
+              (corpus / f'seed-{index}').write_bytes(seed)
+          PY
+          cargo +nightly-2026-10-22 fuzz run byte_stream -- -max_total_time=60 -max_len=131072 -timeout=10
+
+  homebrew-local:
+    name: Local Homebrew install (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Homebrew
+        if: runner.os == 'Linux'
+        run: |
+          if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+            curl --fail --silent --show-error --location \
+              https://raw.githubusercontent.com/Homebrew/install/85d1a3fc80d8a63932f632aca8f787de11d14a64/install.sh \
+              --output "$RUNNER_TEMP/install-homebrew.sh"
+            NONINTERACTIVE=1 bash "$RUNNER_TEMP/install-homebrew.sh"
+          fi
+          echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Build from this checkout and install through a local tap
+        run: |
+          scripts/build-local-archive.sh
+          scripts/check-homebrew-install.sh
+
+  snap-local:
+    name: Local Snap build, install, and use
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Prepare snapd and the pinned Snapcraft builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes snapd
+          sudo systemctl enable --now snapd.socket
+          sudo snap wait system seed.loaded
+          sudo snap install snapcraft --classic --revision=17614
+          sudo snap install core24
+          echo /snap/bin >> "$GITHUB_PATH"
+          /snap/bin/snapcraft --version
+      - name: Build, install, use, and remove the unsigned local Snap
+        run: |
+          scripts/build-snap-candidate.sh "$RUNNER_TEMP/bionic-reader-snap"
+          scripts/check-snap-install.sh "$RUNNER_TEMP"/bionic-reader-snap/bionic-reader_*.snap
+
+  node-local-macos:
+    name: Local npm, Yarn, and pnpm installs (macOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install build tools
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          npm install --prefix "$RUNNER_TEMP/node-tools" --ignore-scripts --no-save --no-audit --no-fund --package-lock=false corepack@0.36.0
+          echo "$RUNNER_TEMP/node-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Build local archive and test local Node tarball installations
+        run: |
+          scripts/build-local-archive.sh
+          scripts/package-npm.sh --local
+          scripts/check-node-package-installs.sh target/aarch64-apple-darwin/release/bionic-reader
+
+  framework-loader-tests:
+    name: Pinned shell-framework loader tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install session test shells
+        run: sudo apt-get update && sudo apt-get install --yes fish zsh
+      - name: Install Rust toolchain and fetch locked dependencies
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          cargo fetch --locked
+      - name: Secure runner Zsh completion directories
+        # Preserve the frameworks' compaudit checks on hosted-runner directories.
+        run: |
+          while IFS= read -r directory; do
+            sudo chmod go-w "$directory"
+          done < <(zsh -fc 'autoload -Uz compaudit; compaudit || true')
+      - name: Fetch and test pinned upstream framework loaders
+        run: scripts/check-frameworks.sh
+
+  distribution-static:
+    name: Distribution static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13.17'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install static check tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fish shellcheck zsh
+          python -m pip install --disable-pip-version-check -r packaging/python/requirements-checks.txt
+      - name: Check package sources
+        run: scripts/check-distribution.sh
+
+  target-builds:
+    name: Candidate build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            zig: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            zig: true
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            musl: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13.17'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Install pinned Python packaging tools
+        run: python3 -m pip install --disable-pip-version-check maturin==1.15.0 uv==0.13.5
+      - name: Install GNU target build tools
+        if: matrix.zig
+        run: |
+          python3 -m pip install --disable-pip-version-check ziglang==0.15.1
+          zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
+          test -x "$zig_dir/zig"
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          rustup toolchain install stable --profile minimal
+          cargo +stable install cargo-zigbuild --version 0.23.4 --locked
+      - name: Install musl target tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Build local candidate
+        run: scripts/build-release.sh '${{ matrix.target }}'
+      - name: Install and use the native archive
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          archive=$(find dist/candidates -name "bionic-reader-v*-$CANDIDATE_TARGET.tar.gz" -type f)
+          test -n "$archive"
+          install_root="$RUNNER_TEMP/bionic-reader-archive"
+          mkdir -p "$install_root"
+          tar -xzf "$archive" --strip-components=1 -C "$install_root"
+          python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
+      - name: Build target wheel and smoke-test matching hosts
+        run: scripts/build-python-wheel.sh '${{ matrix.target }}' "$RUNNER_TEMP/python-wheels"
+      - name: Build and install the README's host-local Python wheel
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          if [[ $host == "$CANDIDATE_TARGET" ]]; then
+            scripts/build-python-wheel.sh --local "$host" "$RUNNER_TEMP/local-python-wheels"
+          fi
+      - name: Upload workflow candidate artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bionic-reader-${{ matrix.target }}
+          path: |
+            dist/candidates/v*/bionic-reader-v*-${{ matrix.target }}.tar.gz
+            dist/candidates/v*/SHA256SUMS
+            ${{ runner.temp }}/python-wheels/*.whl
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  linux-package-install-smoke:
+    name: Signed Debian, Fedora, and Arch install smokes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13.17'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.4'
+          cache: false
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          rustup toolchain install stable --profile minimal
+      - name: Install pinned candidate build tools
+        run: |
+          python -m pip install --disable-pip-version-check ziglang==0.15.1
+          zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
+          test -x "$zig_dir/zig"
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          cargo +stable install cargo-zigbuild --version 0.23.4 --locked
+          go install -ldflags="-X main.version=2.47.0" github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build signed-repository candidates and install in distro containers
+        run: scripts/package-manager-install-smoke.sh
+
+  macos-shell-tests:
+    name: macOS shell tests (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Install fish
+        run: brew install fish
+      - name: Unit, CLI, PTY, and launcher tests on macOS Bash 3.2
+        run: cargo test --locked --all-targets
+      - name: Check generated completion files
+        run: scripts/check-completions.sh target/debug/bionic-reader
+
+  workflow-lint:
+    name: GitHub Actions lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.8'
+          cache: false
+      - name: Install pinned actionlint
+        run: GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Check workflow syntax, expressions, and inline shell scripts
+        run: '"$RUNNER_TEMP/actionlint-bin/actionlint" -color'
+
+  source-install:
+    name: Source install and use (${{ matrix.runner }}, Rust ${{ matrix.toolchain }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            toolchain: '1.85.1'
+          - runner: ubuntu-24.04-arm
+            toolchain: '1.85.1'
+          - runner: macos-15-intel
+            toolchain: '1.85.1'
+          - runner: macos-15
+            toolchain: '1.85.1'
+          - runner: ubuntu-24.04
+            toolchain: stable
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13.17'
+      - name: Install Rust toolchain
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: source-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            source-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-
+      - name: Compile and install from the checkout
+        run: cargo install --path . --locked --root "$RUNNER_TEMP/bionic-reader-install"
+      - name: Use the installed executable and reading session
+        run: python3 scripts/check-installed-cli.py "$RUNNER_TEMP/bionic-reader-install/bin/bionic-reader"
+      - name: Uninstall the source installation
+        run: |
+          cargo uninstall --root "$RUNNER_TEMP/bionic-reader-install" bionic-reader
+          test ! -e "$RUNNER_TEMP/bionic-reader-install/bin/bionic-reader"
+      - name: Install from the checkout's Git commit and use the installed tool
+        run: scripts/check-cargo-git-install.sh
+      - name: Package, install, and use the Cargo crate
+        run: scripts/check-cargo-package.sh

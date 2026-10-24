@@ -1,8 +1,10 @@
 # Bionic Reader design
 
-Status: specification published as [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1), labelled `ready-for-agent`. This document records agreed product decisions and synthesized implementation defaults; use the published specification as the implementation reference. Implementation has not started.
+Status: specification published as [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1). The Rust CLI, reading sessions, shell adapters, tests, and distribution candidate tooling are implemented. The [source repository](https://github.com/arturoaviles/bionic-reader) is public. Package publication remains gated on the release prerequisites below. This document records agreed product decisions and synthesized implementation defaults; use the published specification as the implementation reference.
 
-## Product
+The engineering-priority expansion is specified in [ADR 0002](adr/0002-document-rendering-and-reader.md). It supersedes the Latin-only scope, unconditional filter deadline, and single output representation below. The original product decisions remain historical context for compatibility.
+
+## Original product
 
 - Build a Rust CLI named `bionic-reader` that performs local word-prefix emphasis, with no external text-processing service.
 - Accept explicit text with `bionic-reader -t "<TEXT>"` and stdin with `cat <file> | bionic-reader`.
@@ -54,10 +56,10 @@ Status: specification published as [GitHub issue #1](https://github.com/arturoav
 
 - Support macOS and Linux on x86-64 and ARM64. Windows is deferred.
 - Target macOS 11+, Linux glibc 2.28+, and musl-based Linux on both architectures. Package managers may impose stricter host requirements.
-- Every requested package manager is required at the first public release, on its applicable operating systems: Homebrew, apt, dnf, pacman, Snap, pip, uv, npm, Yarn, and pnpm.
-- Project-maintained distribution channels are acceptable: a Homebrew tap, project package repositories, Snap Store, PyPI, and npm. Inclusion in operating-system official repositories is not a release requirement.
+- Every requested package manager is required at the first public release, on its applicable operating systems: Cargo/crates.io, Homebrew, apt, dnf, pacman, Snap, pip, uv, npm, Yarn, and pnpm.
+- Project-maintained distribution channels are acceptable: crates.io, a Homebrew tap, project package repositories, Snap Store, PyPI, and npm. Inclusion in operating-system official repositories is not a release requirement.
 - Snap must preserve reading-session functionality through classic confinement. First public release waits for [Snap Store classic-confinement approval](https://snapcraft.io/docs/reference/administration/reviewing-classic-confinement-snaps/). If approval is refused, revisit the release requirement rather than silently reducing Snap functionality.
-- Keep the repository private during design; making the source public is part of the first-release plan.
+- The source repository is public and available for cloning and source installation. Public package availability remains subject to the release prerequisites.
 - Use the MIT license with copyright attribution to `arturoaviles and contributors`.
 - The executable is always `bionic-reader`. Prefer that package name wherever registrable; use `@arturoaviles/bionic-reader` as the npm fallback and `bionic-reader-cli` on registries without namespaces. Registry-name availability is provisional until reserved.
 
@@ -67,7 +69,7 @@ Status: specification published as [GitHub issue #1](https://github.com/arturoav
 - Prove the session boundary and passthrough behavior in Bash 3.2, modern Bash, Zsh, and fish before expanding framework adapters. Preserve prompts and existing hooks, propagate resizing and signals, maintain job control, and restore terminal state on normal exit, errors, and handled signals.
 - Build macOS x86-64/ARM64 binaries and Linux GNU/musl x86-64/ARM64 binaries. Audit actual deployment targets and linked-library requirements.
 - Distribute one versioned Rust implementation through native packages and thin Python/JavaScript packaging. Python and JavaScript packages must not reimplement text processing.
-- Deliver a Homebrew tap, signed apt/dnf/pacman project repositories, a classic Snap, platform-specific PyPI wheels usable by pip and uv, and npm packages usable by npm, Yarn, and pnpm.
+- Deliver a verified Cargo source crate for crates.io, a Homebrew tap, signed apt/dnf/pacman project repositories, a classic Snap, platform-specific PyPI wheels usable by pip and uv, and npm packages usable by npm, Yarn, and pnpm.
 - Prefer npm platform-specific binary dependencies over install-time compilation or downloads. Verify launcher behavior and modern Yarn execution modes; do not assume all Yarn versions provide global installation.
 - Include shell initialization, framework adapters, completions, configuration examples, and uninstall instructions with the applicable packages. Removing integration must not require reconstructing overwritten user configuration.
 - Prepare registry ownership, name reservations, signing keys, repository hosting, and publisher credentials before release. Validate artifacts before publishing; Snap approval remains an external release blocker.
@@ -85,4 +87,4 @@ Status: specification published as [GitHub issue #1](https://github.com/arturoav
 
 ## Published specification
 
-The product decisions are confirmed through Q1–Q27. The conversation and design were synthesized into [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1) using `to-spec`, including user stories, implementation decisions, testing decisions, scope boundaries, and release prerequisites. Synthesized buffer/deadline values remain subject to prototype validation. No Rust implementation, package publication, registry reservation, or repository-visibility change has been performed.
+The product decisions are confirmed through Q1–Q27. The conversation and design were synthesized into [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1) using `to-spec`, including user stories, implementation decisions, testing decisions, scope boundaries, and release prerequisites. The implementation exercises the buffer and flush bounds through streaming and PTY tests. Package publication, registry reservation, signing identities, repository hosting, and Snap approval remain release work; local candidates do not establish public package availability.
