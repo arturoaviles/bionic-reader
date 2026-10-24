@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::ops::Range;
+use std::str;
 
 use icu_segmenter::WordSegmenter as IcuWordSegmenter;
 use icu_segmenter::WordSegmenterBorrowed;
@@ -94,7 +95,7 @@ impl WordSegmenter for UnicodeSegmenter {
         let mut start = 0;
         for end in self.segmenter.segment_str(text).skip(1) {
             let range = start..end;
-            if text[range].chars().any(char::is_alphabetic) {
+            if contains_letter_grapheme(&text[range]) {
                 let aligned = grapheme_floor(&grapheme_boundaries, start)
                     ..grapheme_ceiling(&grapheme_boundaries, end);
                 if let Some(previous) = ranges.last_mut() {
@@ -452,7 +453,7 @@ fn letter_runs(text: &str, range: Range<usize>) -> Vec<LetterRun> {
     let mut cursor = 0;
 
     while cursor < graphemes.len() {
-        if !is_letter(graphemes[cursor].text) {
+        if !is_letter_grapheme(graphemes[cursor].text) {
             cursor += 1;
             continue;
         }
@@ -461,12 +462,12 @@ fn letter_runs(text: &str, range: Range<usize>) -> Vec<LetterRun> {
         let mut letters = vec![graphemes[cursor].range.clone()];
         cursor += 1;
         while cursor < graphemes.len() {
-            if is_letter(graphemes[cursor].text) {
+            if is_letter_grapheme(graphemes[cursor].text) {
                 letters.push(graphemes[cursor].range.clone());
                 cursor += 1;
             } else if is_apostrophe(graphemes[cursor].text)
                 && cursor + 1 < graphemes.len()
-                && is_letter(graphemes[cursor + 1].text)
+                && is_letter_grapheme(graphemes[cursor + 1].text)
             {
                 cursor += 1;
             } else {
@@ -479,8 +480,29 @@ fn letter_runs(text: &str, range: Range<usize>) -> Vec<LetterRun> {
     runs
 }
 
-fn is_letter(grapheme: &str) -> bool {
-    grapheme.chars().any(char::is_alphabetic)
+pub(crate) fn is_letter_grapheme(grapheme: &str) -> bool {
+    grapheme
+        .chars()
+        .any(|character| character.is_alphabetic() && !is_grapheme_extension(character))
+}
+
+fn contains_letter_grapheme(text: &str) -> bool {
+    text.graphemes(true).any(is_letter_grapheme)
+}
+
+fn is_grapheme_extension(character: char) -> bool {
+    if character.is_ascii() {
+        return false;
+    }
+
+    let mut probe = [0; 5];
+    probe[0] = b'a';
+    let encoded_len = character.encode_utf8(&mut probe[1..]).len();
+    str::from_utf8(&probe[..=encoded_len])
+        .expect("a character encoded as UTF-8 remains valid")
+        .graphemes(true)
+        .count()
+        == 1
 }
 
 fn is_apostrophe(grapheme: &str) -> bool {
@@ -490,6 +512,8 @@ fn is_apostrophe(grapheme: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::ops::Range;
+
+    use unicode_segmentation::UnicodeSegmentation;
 
     use crate::settings::Settings;
 
@@ -552,6 +576,69 @@ mod tests {
             emphasis_spans("café cafe\u{301} 👨‍👩‍👧‍👦", &Settings::default()),
             vec![0..2, 6..8]
         );
+    }
+
+    #[test]
+    #[expect(
+        clippy::unicode_not_nfc,
+        reason = "decomposed Hangul Jamo exercises a multi-scalar grapheme"
+    )]
+    fn alphabetic_marks_need_a_letter_base_and_valid_script_bases_remain_eligible() {
+        let segmenter = UnicodeSegmenter::new();
+        let settings = Settings {
+            fraction: 1.0,
+            min_word_length: 1,
+            ..Settings::default()
+        };
+
+        for punctuation_with_mark in ["/\u{0614}", "/\u{0345}", "\u{0614}"] {
+            assert!(
+                segmenter.word_ranges(punctuation_with_mark).is_empty(),
+                "{punctuation_with_mark:?}"
+            );
+            assert!(
+                emphasis_spans(punctuation_with_mark, &settings).is_empty(),
+                "{punctuation_with_mark:?}"
+            );
+            let mut engine = FixationEngine::new(&settings);
+            assert!(
+                engine
+                    .spans(punctuation_with_mark, &WholeTextSegmenter)
+                    .is_empty()
+            );
+        }
+
+        for word in [
+            "\u{0600}ب",
+            "א\u{05bc}",
+            "क\u{093f}",
+            "가",
+            "ب\u{0614}",
+            "\u{1e4d0}",
+        ] {
+            let spans = emphasis_spans(word, &settings);
+            assert_eq!(spans.len(), 1, "{word:?}");
+            assert_eq!(spans[0], 0..word.len(), "{word:?}");
+            assert!(word.is_char_boundary(spans[0].end));
+            assert!(
+                word.grapheme_indices(true)
+                    .any(|(start, grapheme)| start == spans[0].start
+                        && grapheme.len() == spans[0].end),
+                "span splits a grapheme in {word:?}"
+            );
+        }
+
+        for (word, expected) in [
+            ("abc123", &[(0, 3)][..]),
+            ("123abc", &[(3, 6)][..]),
+            ("abc123def", &[(0, 3), (6, 9)][..]),
+        ] {
+            let spans = emphasis_spans(word, &settings);
+            assert_eq!(spans.len(), expected.len(), "{word:?}");
+            for (span, expected) in spans.iter().zip(expected) {
+                assert_eq!((span.start, span.end), *expected, "{word:?}");
+            }
+        }
     }
 
     #[test]

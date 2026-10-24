@@ -24,6 +24,11 @@ const MAX_MARKDOWN_REFERENCE_BYTES: usize = 1024 * 1024;
 const MAX_TEXT_WORD_BYTES: usize = 64 * 1024;
 const STREAM_CHUNK_BYTES: usize = 16 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    static CONTROL_SCAN_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SequenceKind {
     Csi,
@@ -52,6 +57,13 @@ pub struct ControlFilter {
     retain_safe_controls: bool,
     pending: Vec<u8>,
     draining: Option<SequenceKind>,
+    scan: Option<ControlScan>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ControlScan {
+    start: usize,
+    next: usize,
 }
 
 fn validate_format_combination(settings: &Settings) -> Result<(), Error> {
@@ -74,6 +86,7 @@ impl ControlFilter {
             retain_safe_controls: true,
             pending: Vec::new(),
             draining: None,
+            scan: None,
         }
     }
 
@@ -87,6 +100,7 @@ impl ControlFilter {
             retain_safe_controls: false,
             pending: Vec::new(),
             draining: None,
+            scan: None,
         }
     }
 
@@ -110,6 +124,7 @@ impl ControlFilter {
         let output = self.process(true);
         self.pending.clear();
         self.draining = None;
+        self.scan = None;
         output
     }
 
@@ -129,6 +144,14 @@ impl ControlFilter {
 
         if offset > 0 {
             self.pending.drain(..offset);
+            if let Some(scan) = &mut self.scan {
+                if scan.start >= offset {
+                    scan.start -= offset;
+                    scan.next -= offset;
+                } else {
+                    self.scan = None;
+                }
+            }
         }
         output
     }
@@ -138,15 +161,22 @@ impl ControlFilter {
             if let Some(length) = drain_sequence(&self.pending[*offset..], kind) {
                 *offset += length;
                 self.draining = None;
+                self.scan = None;
             } else {
-                // A two-byte string terminator can straddle calls after an
-                // oversized control has entered draining mode.
-                let suffix = self.pending.last().copied().filter(|byte| {
-                    matches!(kind, SequenceKind::Osc | SequenceKind::String)
-                        && matches!(*byte, 0x1b | 0xc2)
-                });
+                // A string terminator or incomplete UTF-8 scalar can straddle
+                // calls after an oversized control enters draining mode.
+                // Keep only that suffix so completed payload scalars are not
+                // reinterpreted as controls on a later push.
+                let suffix_length = if matches!(kind, SequenceKind::Osc | SequenceKind::String) {
+                    string_drain_suffix_length(&self.pending)
+                } else {
+                    0
+                };
+                let suffix_start = self.pending.len() - suffix_length;
+                let suffix = self.pending[suffix_start..].to_vec();
                 self.pending.clear();
-                self.pending.extend(suffix);
+                self.pending.extend_from_slice(&suffix);
+                self.scan = None;
                 return true;
             }
         }
@@ -274,18 +304,24 @@ impl ControlFilter {
     }
 
     fn parse_csi(&self, start: usize) -> ParsedControl {
-        let rest = &self.pending[start + 2..];
+        let body_start = start + 2;
+        let scan_start = self.scan_start(start, body_start);
+        let rest = &self.pending[scan_start..];
+        Self::record_scan_steps(rest.len());
         let Some(relative_end) = rest.iter().position(|byte| (0x40..=0x7e).contains(byte)) else {
-            return ParsedControl::Incomplete(SequenceKind::Csi);
+            return ParsedControl::Incomplete {
+                kind: SequenceKind::Csi,
+                next_scan: self.pending.len(),
+            };
         };
-        let end = start + 2 + relative_end + 1;
+        let end = scan_start + relative_end + 1;
         let bytes = &self.pending[start..end];
         let safe = self.retain_safe_controls && bytes.last() == Some(&b'm') && valid_sgr(bytes);
         ParsedControl::Complete { end, safe }
     }
 
     fn parse_string_control(&self, start: usize, kind: SequenceKind) -> ParsedControl {
-        self.parse_string_control_at(start + 2, kind)
+        self.parse_string_control_at(start, start + 2, kind)
     }
 
     fn parse_c1_control(
@@ -296,22 +332,33 @@ impl ControlFilter {
     ) -> ParsedControl {
         if kind == SequenceKind::Csi {
             let body_start = start + prefix_length;
-            let rest = &self.pending[body_start..];
+            let scan_start = self.scan_start(start, body_start);
+            let rest = &self.pending[scan_start..];
+            Self::record_scan_steps(rest.len());
             let Some(relative_end) = rest.iter().position(|byte| (0x40..=0x7e).contains(byte))
             else {
-                return ParsedControl::Incomplete(SequenceKind::Csi);
+                return ParsedControl::Incomplete {
+                    kind: SequenceKind::Csi,
+                    next_scan: self.pending.len(),
+                };
             };
-            let end = body_start + relative_end + 1;
+            let end = scan_start + relative_end + 1;
             let safe = self.retain_safe_controls
                 && self.pending[end - 1] == b'm'
                 && valid_sgr_parameters(&self.pending[body_start..end - 1]);
             return ParsedControl::Complete { end, safe };
         }
-        self.parse_string_control_at(start + prefix_length, kind)
+        self.parse_string_control_at(start, start + prefix_length, kind)
     }
 
-    fn parse_string_control_at(&self, body_start: usize, kind: SequenceKind) -> ParsedControl {
-        let mut offset = body_start;
+    fn parse_string_control_at(
+        &self,
+        start: usize,
+        body_start: usize,
+        kind: SequenceKind,
+    ) -> ParsedControl {
+        let scan_start = self.scan_start(start, body_start);
+        let mut offset = scan_start;
         let mut terminator_end = None;
         let mut terminator_start = None;
         while let Some(byte) = self.pending.get(offset).copied() {
@@ -326,7 +373,7 @@ impl ControlFilter {
                     terminator_start = Some(offset);
                     break;
                 }
-                0x9c => {
+                0x9c if is_c1_st_terminator(&self.pending, offset) => {
                     terminator_end = Some(offset + 1);
                     terminator_start = Some(offset);
                     break;
@@ -340,8 +387,13 @@ impl ControlFilter {
             }
         }
         let Some(end) = terminator_end else {
-            return ParsedControl::Incomplete(kind);
+            Self::record_scan_steps(self.pending.len().saturating_sub(scan_start));
+            return ParsedControl::Incomplete {
+                kind,
+                next_scan: self.pending.len().saturating_sub(3).max(body_start),
+            };
         };
+        Self::record_scan_steps(offset.saturating_sub(scan_start));
         let safe = kind == SequenceKind::Osc
             && self.retain_safe_controls
             && safe_osc8_body(&self.pending[body_start..terminator_start.unwrap_or(end)]);
@@ -358,25 +410,35 @@ impl ControlFilter {
     ) -> bool {
         match parsed {
             ParsedControl::Complete { end, safe } => {
+                self.scan = None;
                 if self.retain_safe_controls && safe && end - start <= MAX_CONTROL_BYTES {
                     output.extend_from_slice(&self.pending[start..end]);
                 }
                 *offset = end;
                 false
             }
-            ParsedControl::Incomplete(kind) if !eof => {
+            ParsedControl::Incomplete { kind, next_scan } if !eof => {
                 let pending_length = self.pending.len() - start;
                 if pending_length > MAX_CONTROL_BYTES {
                     self.draining = Some(kind);
-                    *offset = self.pending.len()
-                        - usize::from(
-                            matches!(kind, SequenceKind::Osc | SequenceKind::String)
-                                && matches!(self.pending.last(), Some(0x1b | 0xc2)),
-                        );
+                    self.scan = None;
+                    let retained_suffix =
+                        if matches!(kind, SequenceKind::Osc | SequenceKind::String) {
+                            string_drain_suffix_length(&self.pending[start..])
+                        } else {
+                            0
+                        };
+                    *offset = self.pending.len() - retained_suffix;
+                } else {
+                    self.scan = Some(ControlScan {
+                        start,
+                        next: next_scan,
+                    });
                 }
                 true
             }
-            ParsedControl::Incomplete(_) => {
+            ParsedControl::Incomplete { .. } => {
+                self.scan = None;
                 *offset = self.pending.len();
                 true
             }
@@ -384,13 +446,19 @@ impl ControlFilter {
     }
 
     fn parse_escape_sequence(&self, start: usize) -> ParsedControl {
-        let mut offset = start + 1;
+        let scan_start = self.scan_start(start, start + 1);
+        let mut offset = scan_start;
         while offset < self.pending.len() && (0x20..=0x2f).contains(&self.pending[offset]) {
             offset += 1;
         }
         if offset >= self.pending.len() {
-            return ParsedControl::Incomplete(SequenceKind::Escape);
+            Self::record_scan_steps(offset.saturating_sub(scan_start));
+            return ParsedControl::Incomplete {
+                kind: SequenceKind::Escape,
+                next_scan: offset,
+            };
         }
+        Self::record_scan_steps(offset.saturating_sub(scan_start) + 1);
         if (0x30..=0x7e).contains(&self.pending[offset]) {
             ParsedControl::Complete {
                 end: offset + 1,
@@ -398,17 +466,39 @@ impl ControlFilter {
             }
         } else {
             ParsedControl::Complete {
-                end: start + 1,
+                // Drop the ESC plus any intermediates, then let the invalid
+                // byte be processed normally. This matches the streaming
+                // overflow drain path and keeps chunked input invariant.
+                end: offset,
                 safe: false,
             }
         }
+    }
+
+    fn scan_start(&self, start: usize, initial: usize) -> usize {
+        self.scan
+            .filter(|scan| scan.start == start)
+            .map_or(initial, |scan| scan.next.max(initial))
+    }
+
+    fn record_scan_steps(count: usize) {
+        #[cfg(test)]
+        CONTROL_SCAN_STEPS.with(|steps| steps.set(steps.get().saturating_add(count)));
+        #[cfg(not(test))]
+        let _ = count;
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum ParsedControl {
-    Complete { end: usize, safe: bool },
-    Incomplete(SequenceKind),
+    Complete {
+        end: usize,
+        safe: bool,
+    },
+    Incomplete {
+        kind: SequenceKind,
+        next_scan: usize,
+    },
 }
 
 /// Converts a document using the configured input and output formats.
@@ -1161,6 +1251,7 @@ fn render_stream_terminal(
         retain_safe_controls: !strip_all,
         pending: Vec::new(),
         draining: None,
+        scan: None,
     };
     let mut transformer = Transformer::new(settings, enabled && !strip_all);
     let mut chunk = [0_u8; STREAM_CHUNK_BYTES];
@@ -1224,6 +1315,41 @@ fn strip_controls(input: &[u8]) -> Vec<u8> {
     output
 }
 
+fn is_c1_st_terminator(input: &[u8], offset: usize) -> bool {
+    if input.get(offset) != Some(&0x9c) {
+        return false;
+    }
+    if offset > 0 && input[offset - 1] == 0xc2 {
+        return true;
+    }
+
+    let earliest_start = offset.saturating_sub(3);
+    for start in earliest_start..offset {
+        let width = match input[start] {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => continue,
+        };
+        if start + width == offset + 1 && str::from_utf8(&input[start..=offset]).is_ok() {
+            return false;
+        }
+    }
+    true
+}
+
+fn string_drain_suffix_length(input: &[u8]) -> usize {
+    let mut suffix_length = usize::from(input.last() == Some(&0x1b));
+    for start in input.len().saturating_sub(3)..input.len() {
+        if (0xc2..=0xf4).contains(&input[start])
+            && str::from_utf8(&input[start..]).is_err_and(|error| error.error_len().is_none())
+        {
+            suffix_length = suffix_length.max(input.len() - start);
+        }
+    }
+    suffix_length
+}
+
 fn drain_sequence(input: &[u8], kind: SequenceKind) -> Option<usize> {
     match kind {
         SequenceKind::Csi => input
@@ -1234,7 +1360,8 @@ fn drain_sequence(input: &[u8], kind: SequenceKind) -> Option<usize> {
             .iter()
             .enumerate()
             .find_map(|(index, byte)| match *byte {
-                0x07 | 0x9c => Some(index + 1),
+                0x07 => Some(index + 1),
+                0x9c if is_c1_st_terminator(input, index) => Some(index + 1),
                 0x1b if input.get(index + 1) == Some(&b'\\') => Some(index + 2),
                 0xc2 if input.get(index + 1) == Some(&0x9c) => Some(index + 2),
                 _ => None,
@@ -1242,8 +1369,14 @@ fn drain_sequence(input: &[u8], kind: SequenceKind) -> Option<usize> {
         SequenceKind::String => find_string_terminator(input),
         SequenceKind::Escape => input
             .iter()
-            .position(|byte| (0x30..=0x7e).contains(byte))
-            .map(|index| index + 1),
+            .position(|byte| !(0x20..=0x2f).contains(byte))
+            .map(|index| {
+                if (0x30..=0x7e).contains(&input[index]) {
+                    index + 1
+                } else {
+                    index
+                }
+            }),
     }
 }
 
@@ -1270,7 +1403,7 @@ fn find_string_terminator(input: &[u8]) -> Option<usize> {
     let mut offset = 0;
     while offset < input.len() {
         match input[offset] {
-            0x9c => return Some(offset + 1),
+            0x9c if is_c1_st_terminator(input, offset) => return Some(offset + 1),
             0x1b if input.get(offset + 1) == Some(&b'\\') => return Some(offset + 2),
             0xc2 if input.get(offset + 1) == Some(&0x9c) => return Some(offset + 2),
             _ => offset += 1,
@@ -1420,6 +1553,10 @@ fn markdown_parser<'a>(
         .into_offset_iter()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "keep parser nesting state and offset-based source edits visible in one pass"
+)]
 fn render_markdown_source(
     source: &str,
     settings: &Settings,
@@ -1438,6 +1575,7 @@ fn render_markdown_source(
     let mut strong_depth = 0_usize;
     let mut code_depth = 0_usize;
     let mut image_depth = 0_usize;
+    let mut strong_suffix_to_skip = vec![0; events.len()];
     for (event_index, (event, range)) in events.iter().enumerate() {
         match event {
             Event::Start(Tag::Strong) => strong_depth += 1,
@@ -1462,6 +1600,22 @@ fn render_markdown_source(
                 append_emphasis_edits(source, range.start + delimiter, spans, settings, &mut edits);
             }
             Event::Text(text)
+                if enabled
+                    && strong_depth > 0
+                    && image_depth == 0
+                    && (code_depth == 0
+                        || settings.format == OutputFormat::Ansi && !settings.skip_code)
+                    && !unsafe_ranges
+                        .iter()
+                        .any(|blocked| range.start < blocked.end && range.end > blocked.start) =>
+            {
+                if let Some((suffix_event, suffix_len)) =
+                    advance_markdown_strong_text(&events, event_index, text, segmenter, engine)
+                {
+                    strong_suffix_to_skip[suffix_event] = suffix_len;
+                }
+            }
+            Event::Text(text)
                 if strong_depth == 0
                     && image_depth == 0
                     && (settings.format == OutputFormat::Ansi && !settings.skip_code
@@ -1470,12 +1624,24 @@ fn render_markdown_source(
                         .iter()
                         .any(|blocked| range.start < blocked.end && range.end > blocked.start) =>
             {
+                let skipped_suffix = if enabled {
+                    strong_suffix_to_skip[event_index]
+                } else {
+                    0
+                };
                 let spans = if enabled
                     && !(code_depth > 0
                         && settings.format == OutputFormat::Ansi
                         && !settings.skip_code)
                 {
-                    markdown_fixation_spans(&events, event_index, text, segmenter, engine)
+                    selected_markdown_text_spans(
+                        &events,
+                        event_index,
+                        text,
+                        segmenter,
+                        engine,
+                        skipped_suffix,
+                    )
                 } else {
                     Vec::new()
                 };
@@ -1557,6 +1723,53 @@ fn markdown_fixation_spans(
                 .any(|range| span.start < range.end && span.end > range.start)
         })
         .collect()
+}
+
+fn selected_markdown_text_spans(
+    events: &[(Event<'_>, Range<usize>)],
+    event_index: usize,
+    text: &str,
+    segmenter: &dyn WordSegmenter,
+    engine: &mut FixationEngine,
+    skipped_prefix: usize,
+) -> Vec<Range<usize>> {
+    if skipped_prefix == 0 {
+        return markdown_fixation_spans(events, event_index, text, segmenter, engine);
+    }
+
+    let blocked = markdown_strong_adjacencies(events, event_index, text);
+    engine
+        .spans(&text[skipped_prefix..], segmenter)
+        .into_iter()
+        .map(|span| span.start + skipped_prefix..span.end + skipped_prefix)
+        .filter(|span| {
+            !blocked
+                .iter()
+                .any(|range| span.start < range.end && span.end > range.start)
+        })
+        .collect()
+}
+
+fn advance_markdown_strong_text(
+    events: &[(Event<'_>, Range<usize>)],
+    event_index: usize,
+    text: &str,
+    segmenter: &dyn WordSegmenter,
+    engine: &mut FixationEngine,
+) -> Option<(usize, usize)> {
+    let continuation = strong_word_continuation(events, event_index, text, segmenter);
+    if let Some((suffix_event, suffix_len)) = continuation {
+        let Event::Text(suffix) = &events[suffix_event].0 else {
+            unreachable!("continuation event was validated as Markdown text");
+        };
+        let mut combined = String::with_capacity(text.len() + suffix_len);
+        combined.push_str(text);
+        combined.push_str(&suffix[..suffix_len]);
+        let _ = engine.spans(&combined, segmenter);
+    } else {
+        let _ = engine.spans(text, segmenter);
+    }
+    continuation
 }
 
 fn append_emphasis_edits(
@@ -1706,6 +1919,37 @@ fn markdown_strong_adjacencies(
     blocked
 }
 
+fn strong_word_continuation(
+    events: &[(Event<'_>, Range<usize>)],
+    event_index: usize,
+    strong_text: &str,
+    segmenter: &dyn WordSegmenter,
+) -> Option<(usize, usize)> {
+    if !events
+        .get(event_index + 1)
+        .is_some_and(|(event, _)| matches!(event, Event::End(pulldown_cmark::TagEnd::Strong)))
+    {
+        return None;
+    }
+
+    let suffix_event = event_index + 2;
+    let Event::Text(suffix) = &events.get(suffix_event)?.0 else {
+        return None;
+    };
+    let boundary = strong_text.len();
+    let mut combined = String::with_capacity(boundary.saturating_add(suffix.len()));
+    combined.push_str(strong_text);
+    combined.push_str(suffix);
+    let suffix_len = segmenter
+        .word_ranges(&combined)
+        .into_iter()
+        .find(|range| range.start < boundary && range.end > boundary)?
+        .end
+        .saturating_sub(boundary);
+
+    (suffix_len > 0).then_some((suffix_event, suffix_len))
+}
+
 fn prefix_word(text: &str) -> Option<Range<usize>> {
     let mut end = 0;
     for (offset, character) in text.char_indices() {
@@ -1744,6 +1988,7 @@ fn render_markdown_html(
     let mut strong_depth = 0_usize;
     let mut code_depth = 0_usize;
     let mut image_depth = 0_usize;
+    let mut strong_suffix_to_skip = vec![0; events.len()];
     let rendered = events.iter().enumerate().map(|(index, (event, _))| {
         match event {
             Event::Start(tag) => {
@@ -1772,20 +2017,42 @@ fn render_markdown_html(
             }
             Event::Text(text)
                 if enabled
+                    && strong_depth > 0
+                    && image_depth == 0
+                    && (code_depth == 0 || !settings.skip_code) =>
+            {
+                if let Some((suffix_event, suffix_len)) =
+                    advance_markdown_strong_text(&events, index, text, segmenter, engine)
+                {
+                    strong_suffix_to_skip[suffix_event] = suffix_len;
+                }
+                event.clone()
+            }
+            Event::Text(text)
+                if enabled
                     && image_depth == 0
                     && strong_depth == 0
                     && (code_depth == 0 || !settings.skip_code) =>
             {
-                let blocked = markdown_strong_adjacencies(&events, index, text);
-                let spans: Vec<_> = engine
-                    .spans(text, segmenter)
-                    .into_iter()
-                    .filter(|span| {
-                        !blocked
-                            .iter()
-                            .any(|range| span.start < range.end && span.end > range.start)
-                    })
-                    .collect();
+                let skipped_suffix = strong_suffix_to_skip[index];
+                let spans: Vec<Range<usize>> = if skipped_suffix > 0 {
+                    engine
+                        .spans(&text[skipped_suffix..], segmenter)
+                        .into_iter()
+                        .map(|span| span.start + skipped_suffix..span.end + skipped_suffix)
+                        .collect()
+                } else {
+                    let blocked = markdown_strong_adjacencies(&events, index, text);
+                    engine
+                        .spans(text, segmenter)
+                        .into_iter()
+                        .filter(|span| {
+                            !blocked
+                                .iter()
+                                .any(|range| span.start < range.end && span.end > range.start)
+                        })
+                        .collect()
+                };
                 Event::InlineHtml(render_html_text(text, &spans, settings).into())
             }
             Event::Code(text) if enabled && image_depth == 0 && !settings.skip_code => {
@@ -1953,5 +2220,34 @@ mod tests {
         let mut output = filter.push(b"text\x1b[31");
         output.extend(filter.finish());
         assert_eq!(output, b"text");
+    }
+
+    #[test]
+    fn bytewise_control_scanning_does_not_recheck_the_entire_prefix() {
+        let mut osc = b"\x1b]8;;https://example.test/".to_vec();
+        osc.extend(std::iter::repeat_n(b'x', 4000));
+        osc.push(0x07);
+
+        let mut csi = b"\x1b[".to_vec();
+        csi.extend(std::iter::repeat_n(b'1', 4000));
+        csi.push(b'm');
+
+        for input in [&osc, &csi] {
+            super::CONTROL_SCAN_STEPS.with(|steps| steps.set(0));
+            let mut filter = ControlFilter::new(ControlPolicy::Safe);
+            let mut output = Vec::new();
+            for byte in input {
+                output.extend(filter.push(std::slice::from_ref(byte)));
+            }
+            output.extend(filter.finish());
+            assert_eq!(output, *input);
+            let scan_steps = super::CONTROL_SCAN_STEPS.with(std::cell::Cell::get);
+            assert!(
+                scan_steps <= input.len().saturating_mul(5),
+                "scanned {} positions for {} input bytes",
+                scan_steps,
+                input.len()
+            );
+        }
     }
 }

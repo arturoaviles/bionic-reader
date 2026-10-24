@@ -6,11 +6,15 @@ on:
     paths:
       - Cargo.toml
       - Cargo.lock
+      - fuzz/Cargo.toml
+      - fuzz/Cargo.lock
       - .github/workflows/security.yml
   pull_request:
     paths:
       - Cargo.toml
       - Cargo.lock
+      - fuzz/Cargo.toml
+      - fuzz/Cargo.lock
       - .github/workflows/security.yml
   schedule:
     - cron: '17 5 * * 1'
@@ -39,4 +43,6 @@ jobs:
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit Cargo.lock against RustSec advisories
-        run: cargo audit --deny warnings
+        run: |
+          cargo audit --deny warnings
+          cargo audit --file fuzz/Cargo.lock --deny warnings

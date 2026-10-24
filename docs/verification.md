@@ -72,42 +72,45 @@ Strengthened framework tests start the user's interactive shell and let the adap
 
 ## Engineering priorities and coverage follow-up (2026-10-24)
 
-The priority audit expanded the original terminal MVP according to [ADR 0002](adr/0002-document-rendering-and-reader.md). The implementation now provides ICU4X multilingual word segmentation, grapheme-based fixation, replaceable segmentation and reusable spans, per-length rules and profiles, safe document controls, deterministic default streaming, Markdown-aware source preservation, ANSI/plain/Markdown/HTML output, and an interactive document reader with search and live settings.
-
-The independent review found and the parent fixed: reader signal-setup ordering, C1 sequence residue, nested reference-definition protection, giant-grapheme quadratic work and unbounded retention, repeated rescanning during backward search, reference-catalog reparsing for every Markdown block, and unsafe-link escaping that disabled surrounding Markdown structure. New end-to-end tests also exposed missing inline-code HTML tags, source-layout changes in Markdown-to-ANSI conversion, repeated final reader rows, and omitted inline-code emphasis with code opt-in. Fuzzing found an oversized-control terminator split bug; its minimized behavior is now an ordinary regression. An analogous 64 KiB session-marker boundary is covered and fixed.
+[ADR 0002](adr/0002-document-rendering-and-reader.md) expands the terminal MVP to ICU4X multilingual segmentation, reusable fixation spans and custom segmenters, length rules and profiles, ANSI/plain/Markdown/HTML rendering, safe document controls, deterministic streaming, and an interactive reader with search and adjustable settings. The README documents repository installation for all 11 package-manager routes, seven framework adapters, and manual Bash/Zsh/fish completions. No Bionic Reader registry package has been published.
 
 | Check | Current local result |
 | --- | --- |
-| Rust 1.85.1 complete suite, macOS ARM64 | 219 passed, including 111 library tests and 42 document integration tests |
-| Actual upstream framework startup workflows | All seven passed with coverage instrumentation |
-| Rustdoc examples and warning-free documentation | Five examples passed; documentation build passed |
-| Generated properties | Five properties passed with 4,096 cases each |
-| End-to-end workflows | Real executable, saved ANSI files, piped input, Markdown reprocessing, HTML export, config/flag precedence, diagnostics, reader PTYs, and interactive shell sessions passed |
-| Rust formatting, Clippy, distribution static checks, actionlint, generated completions | Passed |
-| Installed CLI and PTY checker | Passed with new format, profile, control-policy, and Markdown checks |
-| Linux release streaming memory | 40 MiB transformed; 11,776,000-byte peak RSS and 6,844,416-byte growth after warmup |
-| RustSec lockfile audit | No reported advisories in 117 dependencies using the locally cached advisory database; CI refreshes it |
+| Complete Rust 1.85.1 suite, macOS ARM64 | 282 passed, including 147 library tests and 58 document integration tests |
+| Complete Rust 1.85.1 suite, Linux ARM64 | 285 passed, including the Linux-only input/output and descriptor-limit failures |
+| Real upstream framework startup workflows | All seven passed with both coverage compilers |
+| Rustdoc examples and documentation | Five examples passed; documentation built with warnings denied |
+| Generated properties | Six properties passed with 4,096 cases each |
+| Sanitizer fuzzing with varied fixation settings | 20,795 inputs completed in 61 seconds without a failure |
+| Makefile verification | `make verify` passed, including both Rust workspaces, completion drift, and distribution source checks |
+| Zsh completion | Real ZLE completion passed for subcommands, options, and option values |
+| Linux release streaming memory | 40 MiB input; 11,935,744-byte peak RSS and 7,380,992-byte growth after warmup |
+| RustSec lockfile audits | No reported advisories in the 117-dependency application lockfile or 105-dependency fuzz lockfile using the cached advisory database; CI refreshes it |
 
-The first measured minimum-compiler baseline was **84.09% line coverage**. After adding behavioral, error-injection, property, and executable workflow tests, the clean Rust 1.85.1 measurement is **90.74% lines**, **85.73% regions**, and **84.72% functions**. These are measured with cargo-llvm-cov 0.9.1; production files are included. The separate nightly-2026-10-22 run, including the real framework startup workflows, measures **89.40% lines**, **87.93% regions**, **85.10% functions**, and **77.61% branches**. Compiler instrumentation produces different denominators, so the two line percentages are not interchangeable.
+Terminal workflows cover reader navigation/search/settings, resizing, restoration after signals, shell job control, interrupted bypass recovery, and startup cleanup. Linux tests apply descriptor limits only to child processes and check five failure stages: integration preparation, PTY creation, PTY read/write setup, and Bash startup preparation. They verify diagnostics, terminal restoration, and temporary-file cleanup. Executable tests also exercise `/dev/full`, unreadable stdin, configuration errors, saved-file pipelines, format conversion, and malformed input.
+
+Coverage-driven regressions fixed raw and UTF-8-encoded C1 controls receiving emphasis inside escape sequences, UTF-8 continuation bytes mistaken for C1 terminators, oversized/split control boundaries, malformed intermediate escapes, repeated rescanning of long controls and Unicode suffixes, and alphabetic combining marks without a base letter. Operation-count tests bound parser work independently of machine speed. Markdown frequency now remains repeat-safe when generated strong prefixes divide a word across parser events; a generated property varies frequency, minimum length, and fixation strength.
+
+The property configuration previously fixed the count at 256 even when a larger `PROPTEST_CASES` was requested. It now honors that variable, and the current six-property run actually used 4,096 cases per property. CI sets the same count.
+
+The first measured minimum-compiler baseline was **84.09% line coverage**. The clean final Rust 1.85.1 measurement is **93.43% lines**, **88.33% regions**, and **88.41% functions**. The separate nightly-2026-10-22 measurement is **92.59% lines**, **91.47% regions**, **88.76% functions**, and **80.39% branches**. Both include all seven real framework startup workflows and use cargo-llvm-cov 0.9.1. Different compiler instrumentation produces different denominators; these percentages are not interchangeable. No production module is omitted.
 
 | Rust source | Rust 1.85.1 line coverage |
 | --- | --- |
-| `document.rs` | 89.61% |
+| `document.rs` | 90.54% |
 | `error.rs` | 100.00% |
-| `main.rs` | 95.56% |
-| `reader.rs` | 90.11% |
-| `segmentation.rs` | 100.00% |
-| `session.rs` | 84.05% |
-| `settings.rs` | 98.85% |
-| `shell.rs` | 95.83% |
-| `transformer.rs` | 93.39% |
+| `main.rs` | 96.40% |
+| `reader.rs` | 94.53% |
+| `segmentation.rs` | 98.77% |
+| `session.rs` | 87.40% |
+| `settings.rs` | 99.42% |
+| `shell.rs` | 100.00% |
+| `transformer.rs` | 96.31% |
 
-**The requested 100% target remains unmet.** The minimum-compiler report contains 761 uncovered lines. The largest remaining area is session worker/startup and operating-system failure handling, together with terminal error paths and defensive diagnostics. Coverage percentages do not establish that every behavior or operating-system fault has been exercised. CI currently prevents regressions below 85% lines, 80% regions, and 80% functions in its nightly report; these are transitional floors, not the 100% target.
+**The requested 100% target remains unmet.** The MSRV report has 663 uncovered lines; nightly has 691 uncovered lines and 351 uncovered branches. Most remaining paths concern operating-system/worker failures and defensive parser diagnostics. Inline unit-test code is also represented in the compiler's source-file measurements. Passing tests does not establish that every fault or branch has been exercised.
 
-The coverage job uploads HTML, JSON, LCOV, and uncovered-line artifacts. It instruments unit, property, CLI, file-pipeline, reader/session PTY, and seven pinned framework workflows. A separate sanitizer fuzz job runs for 60 seconds with Unicode, ANSI, Markdown, malformed-byte, active-control, and oversized-word seeds. The Linux memory gate uses a release build and measures the executable's own peak with `wait4`, avoiding inherited compiler peaks.
+CI publishes the actual measurements and the open 100% target in its job summary, uploads HTML/JSON/LCOV/uncovered-line artifacts, and enforces transitional floors of 92% lines, 91% regions, 88% functions, and 80% branches. These floors are regression gates, not completion of the target. The fuzzer has a ten-second per-input timeout and uploads failure inputs; malformed-byte, multilingual, C1/ANSI, Markdown, combining-mark, and oversized-control seeds reproduce known edge cases.
 
-Reader working buffers are bounded, including a 4 KiB oversized-grapheme display fallback; the line-position index still grows with the number of lines. Markdown streaming spools to disk and uses bounded blocks/reference data with documented literal fallbacks. Plain/terminal processing retains malformed ordinary bytes; Unicode-dependent document conversion rejects malformed UTF-8, while the interactive view displays replacement characters. These policies are documented in the README and are not claims of linguistic perfection, speed improvement, constant-size indexes, or unlimited parser blocks.
+Reader view buffers are bounded, including a 4 KiB oversized-grapheme display fallback; the line-position index grows with the number of lines. Markdown streaming spools to disk and uses bounded blocks/reference data with documented literal fallbacks. Plain/terminal processing retains malformed ordinary bytes outside removed controls; Unicode document conversion rejects malformed UTF-8, while the reader displays replacement characters. These policies do not promise perfect linguistic analysis or a reading-speed improvement.
 
-The coverage-driven follow-up adds real-terminal preview, terminal help, missing-reader-input, absent HOME/config paths, zero-fixation rules, and invalid incremental grapheme-boundary tests. The Unicode segmentation/fixation module now reaches 100% line coverage on Rust 1.85.1; the separate nightly compiler reports 99.72% lines and 90.62% branches for that module. The project-wide target remains open.
-
-Executing CI caught two test assertions that included optional diagnostic backtraces, a Python smoke PTY with zero window dimensions on Linux, and an ambiguous Cargo Git install after adding the separate fuzz package. Assertions now use the documented backtrace-free display, the smoke PTY starts at 24×80 before exec, and the Git install checker selects `bionic-reader` explicitly (as the README already did). All 30 checks passed for [commit 7882400](https://github.com/arturoaviles/bionic-reader/actions/runs/40107227086), including every package-manager lifecycle and seven real framework workflows. Subsequent coverage tests are checked by the same matrix; the PR's current results remain authoritative.
+Use `make help` for common commands and [CONTRIBUTING.md](../CONTRIBUTING.md) for tool versions, coverage reproduction, fuzzing, and installation checks. The Makefile's core checks are exercised by CI. Both application and fuzz-workspace lockfiles are audited. All 30 checks passed at [commit 7882400](https://github.com/arturoaviles/bionic-reader/actions/runs/40107227086); subsequent changes require the current PR matrix to pass and do not inherit that result. Registry publication, hosted repository distribution, minimum-OS validation, upgrades, and Snap Store approval remain release gates.

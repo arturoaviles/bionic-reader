@@ -7,6 +7,11 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|input: &[u8]| {
     let settings = Settings {
+        every: input.get(1).map_or(1, |value| usize::from(*value) % 7 + 1),
+        min_word_length: input.get(2).map_or(2, |value| usize::from(*value) % 6 + 1),
+        fraction: input
+            .get(3)
+            .map_or(0.5, |value| f64::from(*value % 5) / 4.0),
         emphasis: match input.first().copied().unwrap_or_default() % 3 {
             0 => Emphasis::Bold,
             1 => Emphasis::Underline,

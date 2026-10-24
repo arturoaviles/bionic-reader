@@ -607,7 +607,7 @@ fn send_control_request(socket: &Path, request: &str) -> Result<(), Error> {
         .map_err(|error| {
             Error::with_source("could not read session control response".to_owned(), error)
         })?;
-    if response.starts_with("ok") {
+    if response.trim() == "ok" {
         Ok(())
     } else {
         Err(Error::new(
@@ -2134,6 +2134,8 @@ mod tests {
             b"error:fixture rejection\n",
             b"unexpected",
             b"\xff",
+            b"okay\n",
+            b"ok\nerror:request rejected\n",
         ]
         .into_iter()
         .enumerate()
@@ -2166,5 +2168,178 @@ mod tests {
             }
             server.join().expect("join response fixture");
         }
+    }
+
+    #[test]
+    fn shell_startup_reports_missing_files_invalid_paths_and_unwritable_destinations() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().expect("create startup directory");
+        let integration = directory.path().join("integration.sh");
+        let invalid = PathBuf::from(OsString::from_vec(vec![0xff]));
+        for (kind, source, destination, message) in [
+            (
+                "bash",
+                invalid.as_path(),
+                directory.path(),
+                "integration path",
+            ),
+            (
+                "bash",
+                integration.as_path(),
+                invalid.as_path(),
+                "session path",
+            ),
+            (
+                "bash",
+                integration.as_path(),
+                directory.path(),
+                "read Bash integration",
+            ),
+            (
+                "unsupported",
+                integration.as_path(),
+                directory.path(),
+                "unsupported shell",
+            ),
+        ] {
+            let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+            let error = super::configure_shell(&mut command, kind, source, destination)
+                .expect_err("invalid startup parameters must fail");
+            assert!(format!("{error:#}").contains(message));
+        }
+        std::fs::write(&integration, "# test integration\n").expect("write integration fixture");
+        // A regular file cannot contain the generated startup files, even for root.
+        for (kind, message) in [
+            ("bash", "prepare Bash startup"),
+            ("zsh", "prepare Zsh startup"),
+        ] {
+            let mut command = portable_pty::CommandBuilder::new("/bin/sh");
+            let error = super::configure_shell(&mut command, kind, &integration, &integration)
+                .expect_err("startup destination is not a directory");
+            assert!(format!("{error:#}").contains(message));
+            assert!(error.io_kind().is_some());
+        }
+    }
+
+    #[test]
+    fn bypass_child_reports_spawn_failures_normal_status_and_signal_status() {
+        use std::ffi::{OsStr, OsString};
+        let missing = tempfile::tempdir().expect("create missing-program parent");
+        let error = super::run_bypass_command(missing.path().join("missing").as_os_str(), &[])
+            .expect_err("missing bypass executable must fail");
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::NotFound));
+        assert!(format!("{error:#}").contains("could not run bypass command"));
+        for (script, expected) in [("exit 7", 7), ("kill -TERM $$", 143)] {
+            let status = super::run_bypass_command(
+                OsStr::new("/bin/sh"),
+                &[OsString::from("-c"), OsString::from(script)],
+            )
+            .expect("run bypass subprocess");
+            assert_eq!(status, expected);
+        }
+    }
+
+    fn enabled_runtime() -> Arc<Mutex<RuntimeState>> {
+        Arc::new(Mutex::new(RuntimeState {
+            settings: Settings::default(),
+            enabled: true,
+            enabled_override: None,
+            bypass_tokens: HashSet::new(),
+            ended_bypass_tokens: HashSet::new(),
+        }))
+    }
+
+    #[test]
+    fn session_rendering_propagates_output_errors_at_boundaries_and_timed_flushes() {
+        use std::io::Write;
+        use std::time::Instant;
+
+        struct ClosedOutput;
+        impl Write for ClosedOutput {
+            fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "downstream closed",
+                ))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        for boundary in ["end", "begin", "bypass", "unsafe", "timer", "data"] {
+            let mut state = OutputState::new(enabled_runtime());
+            let mut prefix = Vec::new();
+            state
+                .begin(b"printf reading", &mut prefix)
+                .expect("begin command");
+            state
+                .write_data(b"reading", &mut prefix)
+                .expect("buffer an unfinished word");
+            assert!(prefix.is_empty());
+            let mut closed = ClosedOutput;
+            let result = match boundary {
+                "end" => state.end(&mut closed),
+                "begin" => state.begin(b"printf next", &mut closed),
+                "bypass" => state.bypass_push("abcd".to_owned(), &mut closed),
+                "unsafe" => state.process(
+                    ParsedEvent::Marker(Marker::UnsafeDcs(b"\x1bPunsafe\x1b\\".to_vec())),
+                    &mut closed,
+                ),
+                "timer" => {
+                    state.pending_since = Some(
+                        Instant::now()
+                            .checked_sub(super::PENDING_FLUSH)
+                            .expect("clock supports the flush deadline"),
+                    );
+                    state.flush_pending(&mut closed)
+                }
+                _ => state.write_data(b" next ", &mut closed),
+            };
+            assert_eq!(
+                result.expect_err("output failure must propagate").kind(),
+                io::ErrorKind::BrokenPipe,
+                "{boundary}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_worker_rejects_corrupted_state_and_can_shutdown_after_a_bad_request() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let directory = tempfile::tempdir().expect("create control worker directory");
+        let socket = directory.path().join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind worker socket");
+        listener
+            .set_nonblocking(true)
+            .expect("configure worker socket");
+        let state = enabled_runtime();
+        let poisoned = Arc::clone(&state);
+        thread::spawn(move || {
+            let _lock = poisoned.lock().expect("lock fresh state");
+            panic!("simulate a failed state update");
+        })
+        .join()
+        .expect_err("poison the runtime");
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker = super::spawn_control_server(
+            listener,
+            state,
+            super::ReloadSource {
+                config_path: None,
+                overrides: crate::settings::Overrides::default(),
+            },
+            Arc::clone(&stop),
+        )
+        .expect("spawn worker");
+        let result = super::send_control_request(&socket, "on");
+        stop.store(true, Ordering::Relaxed);
+        worker
+            .join()
+            .expect("worker must stop without a blocked request");
+        let error = result.expect_err("corrupted state must reject the request");
+        assert!(format!("{error:#}").contains("session control state is unavailable"));
     }
 }

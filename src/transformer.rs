@@ -11,16 +11,30 @@ use std::str;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Error;
-use crate::segmentation::{FixationEngine, UnicodeSegmenter, WordSegmenter, is_word_connector};
+use crate::segmentation::{
+    FixationEngine, UnicodeSegmenter, WordSegmenter, is_letter_grapheme, is_word_connector,
+};
 use crate::settings::{Emphasis, Settings};
 
 const MAX_PENDING: usize = 64 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    static TOKEN_SCAN_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControlKind {
     Sgr,
     Metadata,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum C1ControlKind {
+    Csi,
+    Osc,
+    String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -184,6 +198,7 @@ struct Grapheme {
     start_token: usize,
     end_token: usize,
     kind: GraphemeKind,
+    extends_previous_word: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -204,9 +219,83 @@ struct SgrParam {
 enum DrainMode {
     EscapeIntro,
     Csi,
-    Osc { previous_escape: bool },
-    String { previous_escape: bool },
-    Escape { intermediate: bool },
+    Osc {
+        previous_escape: bool,
+        utf8: Utf8ContinuationState,
+    },
+    String {
+        previous_escape: bool,
+        utf8: Utf8ContinuationState,
+    },
+    Escape {
+        intermediate: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Utf8ContinuationState {
+    remaining: u8,
+    next_min: u8,
+    next_max: u8,
+    c1_prefix: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Utf8ByteState {
+    Other,
+    Continuation,
+    EncodedC1St,
+}
+
+impl Utf8ContinuationState {
+    /// Classifies the byte and advances UTF-8 state for a terminal string payload.
+    fn advance(&mut self, byte: u8) -> Utf8ByteState {
+        if self.remaining > 0 && (self.next_min..=self.next_max).contains(&byte) {
+            let encoded_c1_st = self.c1_prefix && self.remaining == 1 && byte == 0x9c;
+            self.remaining -= 1;
+            self.next_min = 0x80;
+            self.next_max = 0xbf;
+            if self.remaining == 0 {
+                self.c1_prefix = false;
+            }
+            return if encoded_c1_st {
+                Utf8ByteState::EncodedC1St
+            } else {
+                Utf8ByteState::Continuation
+            };
+        }
+
+        self.remaining = 0;
+        self.c1_prefix = false;
+        let (remaining, next_min, next_max) = match byte {
+            0xc2..=0xdf => (1, 0x80, 0xbf),
+            0xe0 => (2, 0xa0, 0xbf),
+            0xe1..=0xec | 0xee..=0xef => (2, 0x80, 0xbf),
+            0xed => (2, 0x80, 0x9f),
+            0xf0 => (3, 0x90, 0xbf),
+            0xf1..=0xf3 => (3, 0x80, 0xbf),
+            0xf4 => (3, 0x80, 0x8f),
+            _ => return Utf8ByteState::Other,
+        };
+        self.remaining = remaining;
+        self.next_min = next_min;
+        self.next_max = next_max;
+        self.c1_prefix = byte == 0xc2;
+        Utf8ByteState::Other
+    }
+
+    fn consume_valid_continuation_prefix(&mut self, bytes: &[u8]) -> usize {
+        let mut consumed = 0;
+        for byte in bytes.iter().copied() {
+            if self.remaining == 0 || !(self.next_min..=self.next_max).contains(&byte) {
+                *self = Self::default();
+                break;
+            }
+            self.advance(byte);
+            consumed += 1;
+        }
+        consumed
+    }
 }
 
 #[derive(Debug)]
@@ -214,6 +303,26 @@ struct DrainingControl {
     bytes: Vec<u8>,
     mode: DrainMode,
     tracking: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingControl {
+    mode: DrainMode,
+}
+
+impl PendingControl {
+    fn new(bytes: &[u8]) -> Option<Self> {
+        Some(Self {
+            mode: control_mode(bytes)?,
+        })
+    }
+
+    fn consume(&mut self, bytes: &[u8]) -> bool {
+        bytes
+            .iter()
+            .copied()
+            .any(|byte| drain_mode_complete(&mut self.mode, byte))
+    }
 }
 
 /// Transforms terminal output while preserving stream boundaries and controls.
@@ -243,7 +352,10 @@ pub struct Transformer {
     passthrough_context: String,
     passthrough_collapsed_letters: usize,
     passthrough_apostrophe: bool,
+    pending_control: Option<PendingControl>,
     draining_control: Option<DrainingControl>,
+    utf8_continuation: Utf8ContinuationState,
+    pending_c1_shielded: usize,
 }
 
 impl Transformer {
@@ -310,7 +422,10 @@ impl Transformer {
             passthrough_context: String::new(),
             passthrough_collapsed_letters: 0,
             passthrough_apostrophe: false,
+            pending_control: None,
             draining_control: None,
+            utf8_continuation: Utf8ContinuationState::default(),
+            pending_c1_shielded: 0,
         })
     }
 
@@ -365,8 +480,27 @@ impl Transformer {
 
             let count = remaining.len().min(available);
             let appended = &remaining[..count];
+            let pending_before = self.pending.len();
+            self.pending_c1_shielded = self.pending_c1_shielded.saturating_add(
+                self.utf8_continuation
+                    .consume_valid_continuation_prefix(appended),
+            );
             self.pending.extend_from_slice(appended);
             remaining = &remaining[count..];
+
+            if let Some(mut control) = self.pending_control.take() {
+                if !control.consume(appended) {
+                    self.pending_control = Some(control);
+                    if self.pending.len() >= MAX_PENDING {
+                        if self.passthrough_word {
+                            output.extend(self.release_passthrough_pending());
+                        } else {
+                            output.extend(self.fallback_pending());
+                        }
+                    }
+                    continue;
+                }
+            }
 
             if self.passthrough_word {
                 let (raw, resume) = self.passthrough_until_delimiter();
@@ -380,7 +514,14 @@ impl Transformer {
                 continue;
             }
 
-            if !self.pending_word || !chunk_can_extend_word(appended) {
+            if !self.pending_word
+                || appended.contains(&0x1b)
+                || !chunk_can_extend_word_after_pending(
+                    &self.pending[..pending_before],
+                    appended,
+                    self.pending_word,
+                )
+            {
                 output.extend(self.process_available());
             }
             if self.pending.len() >= MAX_PENDING {
@@ -419,6 +560,7 @@ impl Transformer {
         if !self.enabled {
             self.pending.clear();
             self.pending_word = false;
+            self.pending_control = None;
             return Vec::new();
         }
 
@@ -429,9 +571,14 @@ impl Transformer {
             self.draining_control = None;
             self.style.known = false;
         }
+        self.pending_control = None;
 
         if self.passthrough_word {
-            let (tokens, _) = scan_tokens(&self.pending, /* eof */ false);
+            let (tokens, _) = scan_tokens_with_c1_shield(
+                &self.pending,
+                /* eof */ false,
+                self.pending_c1_shielded,
+            );
             let (visible, _) = visible_text(&tokens);
             self.advance_passthrough_text(&visible, true);
             output.append(&mut self.pending);
@@ -439,14 +586,17 @@ impl Transformer {
             self.pending_word = false;
             self.passthrough_context.clear();
             self.passthrough_collapsed_letters = 0;
+            self.pending_c1_shielded = 0;
             return output;
         }
 
         if !self.pending.is_empty() {
             let pending = mem::take(&mut self.pending);
-            let (tokens, _) = scan_tokens(&pending, /* eof */ true);
+            let (tokens, _) =
+                scan_tokens_with_c1_shield(&pending, /* eof */ true, self.pending_c1_shielded);
             output.extend(self.render(&pending, &tokens));
         }
+        self.pending_c1_shielded = 0;
         self.pending_word = false;
         output
     }
@@ -454,10 +604,15 @@ impl Transformer {
     #[must_use]
     fn process_available(&mut self) -> Vec<u8> {
         if self.pending.is_empty() {
+            self.pending_control = None;
             return Vec::new();
         }
 
-        let (tokens, parse) = scan_tokens(&self.pending, /* eof */ false);
+        let (tokens, parse) = scan_tokens_with_c1_shield(
+            &self.pending,
+            /* eof */ false,
+            self.pending_c1_shielded,
+        );
         let graphemes = graphemes(&tokens);
         let candidate = trailing_candidate_start(&graphemes)
             .into_iter()
@@ -465,6 +620,7 @@ impl Transformer {
                 &tokens,
                 self.segmenter.as_ref(),
             ))
+            .chain(trailing_raw_candidate_start(&tokens))
             .min();
         self.pending_word = candidate.is_some();
         let safe_token_count = candidate.unwrap_or(tokens.len());
@@ -475,12 +631,25 @@ impl Transformer {
         };
 
         if cut == 0 {
+            self.pending_control = parse
+                .incomplete_at
+                .and_then(|start| self.pending_control_at(start));
             return Vec::new();
         }
         let source = self.pending[..cut].to_vec();
         let output = self.render(&source, &tokens[..safe_token_count]);
         self.pending.drain(..cut);
+        self.pending_c1_shielded = self.pending_c1_shielded.saturating_sub(cut);
+        self.pending_control = parse
+            .incomplete_at
+            .filter(|start| *start >= cut)
+            .and_then(|start| self.pending_control_at(start - cut));
         output
+    }
+
+    fn pending_control_at(&self, start: usize) -> Option<PendingControl> {
+        let tail = self.pending.get(start..)?;
+        PendingControl::new(tail)
     }
 
     #[must_use]
@@ -489,8 +658,11 @@ impl Transformer {
             return Vec::new();
         }
 
+        self.pending_control = None;
+        let c1_shielded = mem::take(&mut self.pending_c1_shielded);
         let source = mem::take(&mut self.pending);
-        let (tokens, parse) = scan_tokens(&source, /* eof */ false);
+        let (tokens, parse) =
+            scan_tokens_with_c1_shield(&source, /* eof */ false, c1_shielded);
         self.update_style_from_tokens(&source, &tokens);
         let graphemes = graphemes(&tokens);
         let (visible, _) = visible_text(&tokens);
@@ -520,12 +692,14 @@ impl Transformer {
 
         if let Some(start) = parse.incomplete_at {
             let tail = &source[start..];
-            if tail.first() == Some(&0x1b) {
+            if control_mode(tail).is_some() {
                 let drain = DrainingControl::new(tail);
                 if !drain.tracking {
                     self.style.known = false;
                 }
                 self.draining_control = Some(drain);
+            } else if let Some(state) = utf8_state_for_incomplete_suffix(tail) {
+                self.utf8_continuation = state;
             }
         }
 
@@ -538,18 +712,23 @@ impl Transformer {
             return Vec::new();
         }
 
+        self.pending_control = None;
+        let c1_shielded = mem::take(&mut self.pending_c1_shielded);
         let source = mem::take(&mut self.pending);
-        let (tokens, parse) = scan_tokens(&source, /* eof */ false);
+        let (tokens, parse) =
+            scan_tokens_with_c1_shield(&source, /* eof */ false, c1_shielded);
         self.update_style_from_tokens(&source[..parse.complete_len], &tokens);
         let mut output = source[..parse.complete_len].to_vec();
         if let Some(start) = parse.incomplete_at {
             let tail = &source[start..];
-            if tail.first() == Some(&0x1b) {
+            if control_mode(tail).is_some() {
                 let drain = DrainingControl::new(tail);
                 if !drain.tracking {
                     self.style.known = false;
                 }
                 self.draining_control = Some(drain);
+            } else if let Some(state) = utf8_state_for_incomplete_suffix(tail) {
+                self.utf8_continuation = state;
             }
             output.extend_from_slice(tail);
         }
@@ -557,6 +736,10 @@ impl Transformer {
     }
 
     fn advance_passthrough_text(&mut self, appended: &str, final_boundary: bool) {
+        self.track_passthrough_text(appended, final_boundary, false);
+    }
+
+    fn track_passthrough_text(&mut self, appended: &str, final_boundary: bool, force: bool) {
         if self.passthrough_collapsed_letters > 0 {
             self.passthrough_collapsed_letters = self
                 .passthrough_collapsed_letters
@@ -572,6 +755,12 @@ impl Transformer {
 
         let mut text = mem::take(&mut self.passthrough_context);
         text.push_str(appended);
+        // Selection cannot resume until this run closes. Accumulate a bounded
+        // suffix instead of resegmenting the growing suffix on every tiny read.
+        if !force && !final_boundary && text.len() < MAX_PENDING {
+            self.passthrough_context = text;
+            return;
+        }
         let ranges = self.segmenter.word_ranges(&text);
         let trailing_start = if final_boundary {
             None
@@ -594,6 +783,17 @@ impl Transformer {
         if self.passthrough_context.is_empty() {
             return;
         }
+        // Resolve completed ICU/custom ranges before treating the remaining
+        // open word as oversized. A partial UTF-8 scalar can occupy pending bytes.
+        self.track_passthrough_text("", false, true);
+        if self
+            .passthrough_context
+            .len()
+            .saturating_add(self.pending.len())
+            < MAX_PENDING
+        {
+            return;
+        }
         self.passthrough_collapsed_letters = self
             .passthrough_collapsed_letters
             .saturating_add(letter_grapheme_count(&self.passthrough_context));
@@ -602,7 +802,11 @@ impl Transformer {
 
     #[must_use]
     fn passthrough_until_delimiter(&mut self) -> (Vec<u8>, bool) {
-        let (tokens, parse) = scan_tokens(&self.pending, /* eof */ false);
+        let (tokens, parse) = scan_tokens_with_c1_shield(
+            &self.pending,
+            /* eof */ false,
+            self.pending_c1_shielded,
+        );
         let units = graphemes(&tokens);
         let delimiter_index = units.iter().position(|unit| match unit.kind {
             GraphemeKind::Letter | GraphemeKind::Number | GraphemeKind::Connector => {
@@ -613,6 +817,7 @@ impl Transformer {
                 self.passthrough_apostrophe = true;
                 false
             }
+            GraphemeKind::Other if unit.extends_previous_word => false,
             _ => true,
         });
 
@@ -625,6 +830,7 @@ impl Transformer {
             let source = self.pending[..cut].to_vec();
             self.update_style_from_tokens(&source, &tokens[..delimiter.end_token]);
             let raw: Vec<u8> = self.pending.drain(..cut).collect();
+            self.pending_c1_shielded = self.pending_c1_shielded.saturating_sub(cut);
             self.passthrough_word = false;
             return (raw, true);
         }
@@ -635,6 +841,11 @@ impl Transformer {
         self.advance_passthrough_text(&visible, false);
         self.update_style_from_tokens(&source, &tokens);
         let raw: Vec<u8> = self.pending.drain(..cut).collect();
+        self.pending_c1_shielded = self.pending_c1_shielded.saturating_sub(cut);
+        self.pending_control = parse
+            .incomplete_at
+            .filter(|start| *start >= cut)
+            .and_then(|start| self.pending_control_at(start - cut));
         (raw, false)
     }
 
@@ -875,11 +1086,33 @@ fn restore_bold_dim(output: &mut Vec<u8>, style: StyleState) {
 
 #[must_use]
 fn scan_tokens(source: &[u8], eof: bool) -> (Vec<Token>, ParseResult) {
+    scan_tokens_with_c1_shield(source, eof, 0)
+}
+
+#[must_use]
+fn scan_tokens_with_c1_shield(
+    source: &[u8],
+    eof: bool,
+    c1_shielded_prefix: usize,
+) -> (Vec<Token>, ParseResult) {
+    #[cfg(test)]
+    TOKEN_SCAN_BYTES.with(|counter| {
+        counter.set(counter.get().saturating_add(source.len()));
+    });
+
     let mut tokens = Vec::new();
     let mut offset = 0;
     while offset < source.len() {
-        if source[offset] == 0x1b {
-            match parse_escape(source, offset) {
+        let control = if source[offset] == 0x1b {
+            Some(parse_escape(source, offset))
+        } else if offset < c1_shielded_prefix {
+            None
+        } else {
+            c1_control_intro(source, offset)
+                .map(|(header_len, kind)| parse_c1_control(source, offset, header_len, kind))
+        };
+        if let Some(control) = control {
+            match control {
                 Some((end, kind)) => {
                     tokens.push(Token {
                         start: offset,
@@ -969,69 +1202,9 @@ fn scan_tokens(source: &[u8], eof: bool) -> (Vec<Token>, ParseResult) {
 fn parse_escape(source: &[u8], start: usize) -> Option<(usize, ControlKind)> {
     let next = *source.get(start + 1)?;
     match next {
-        b'[' => {
-            let mut index = start + 2;
-            while let Some(byte) = source.get(index).copied() {
-                if (0x40..=0x7e).contains(&byte) {
-                    let end = index + 1;
-                    let kind = if end - start <= MAX_PENDING
-                        && byte == b'm'
-                        && sgr_params(&source[start..end]).is_some()
-                    {
-                        ControlKind::Sgr
-                    } else if is_presentation_neutral_control(&source[start..end]) {
-                        ControlKind::Metadata
-                    } else {
-                        ControlKind::Other
-                    };
-                    return Some((end, kind));
-                }
-                index += 1;
-                if index - start > MAX_PENDING {
-                    // Keep scanning to the terminator, but the sequence itself is
-                    // always passthrough because its state cannot be reconstructed.
-                }
-            }
-            None
-        }
-        b']' => {
-            let mut index = start + 2;
-            let mut terminator = None;
-            while index < source.len() {
-                if source[index] == 0x07 {
-                    terminator = Some(index + 1);
-                    break;
-                }
-                if source[index] == 0x1b && source.get(index + 1) == Some(&b'\\') {
-                    terminator = Some(index + 2);
-                    break;
-                }
-                index += 1;
-            }
-            let end = terminator?;
-            let payload_end = if source[end - 1] == 0x07 {
-                end - 1
-            } else {
-                end - 2
-            };
-            let payload = &source[start + 2..payload_end];
-            let kind = if is_safe_osc(payload) {
-                ControlKind::Metadata
-            } else {
-                ControlKind::Other
-            };
-            Some((end, kind))
-        }
-        b'P' | b'^' | b'_' | b'X' => {
-            let mut index = start + 2;
-            while index + 1 < source.len() {
-                if source[index] == 0x1b && source[index + 1] == b'\\' {
-                    return Some((index + 2, ControlKind::Other));
-                }
-                index += 1;
-            }
-            None
-        }
+        b'[' => parse_csi(source, start, start + 2),
+        b']' => parse_osc(source, start + 2),
+        b'P' | b'^' | b'_' | b'X' => parse_string_control(source, start + 2),
         _ => {
             if !(0x20..=0x2f).contains(&next) {
                 return Some((start + 2, ControlKind::Other));
@@ -1058,6 +1231,114 @@ fn parse_escape(source: &[u8], start: usize) -> Option<(usize, ControlKind)> {
     }
 }
 
+fn c1_control_intro(source: &[u8], start: usize) -> Option<(usize, C1ControlKind)> {
+    let first = *source.get(start)?;
+    let (header_len, byte) = if first == 0xc2
+        && source
+            .get(start + 1)
+            .is_some_and(|byte| matches!(*byte, 0x90 | 0x98 | 0x9b | 0x9d | 0x9e | 0x9f))
+    {
+        (2, source[start + 1])
+    } else {
+        (1, first)
+    };
+    let kind = match byte {
+        0x9b => C1ControlKind::Csi,
+        0x9d => C1ControlKind::Osc,
+        0x90 | 0x98 | 0x9e | 0x9f => C1ControlKind::String,
+        _ => return None,
+    };
+    Some((header_len, kind))
+}
+
+fn parse_c1_control(
+    source: &[u8],
+    start: usize,
+    header_len: usize,
+    kind: C1ControlKind,
+) -> Option<(usize, ControlKind)> {
+    let payload_start = start + header_len;
+    match kind {
+        C1ControlKind::Csi => parse_csi(source, start, payload_start),
+        C1ControlKind::Osc => parse_osc(source, payload_start),
+        C1ControlKind::String => parse_string_control(source, payload_start),
+    }
+}
+
+fn parse_csi(source: &[u8], start: usize, parameter_start: usize) -> Option<(usize, ControlKind)> {
+    let mut index = parameter_start;
+    while let Some(byte) = source.get(index).copied() {
+        if (0x40..=0x7e).contains(&byte) {
+            let end = index + 1;
+            let sequence = &source[start..end];
+            let kind =
+                if end - start <= MAX_PENDING && byte == b'm' && sgr_params(sequence).is_some() {
+                    ControlKind::Sgr
+                } else if is_presentation_neutral_control(sequence) {
+                    ControlKind::Metadata
+                } else {
+                    ControlKind::Other
+                };
+            return Some((end, kind));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn parse_osc(source: &[u8], payload_start: usize) -> Option<(usize, ControlKind)> {
+    let mut index = payload_start;
+    let mut terminator = None;
+    let mut utf8 = Utf8ContinuationState::default();
+    while index < source.len() {
+        let byte = source[index];
+        let utf8_state = utf8.advance(byte);
+        if byte == 0x07 || byte == 0x9c && utf8_state == Utf8ByteState::Other {
+            terminator = Some((index + 1, index));
+            break;
+        }
+        if byte == 0x9c && utf8_state == Utf8ByteState::EncodedC1St {
+            terminator = Some((index + 1, index - 1));
+            break;
+        }
+        if byte == 0x1b && source.get(index + 1) == Some(&b'\\') {
+            terminator = Some((index + 2, index));
+            break;
+        }
+        index += 1;
+    }
+    let (end, payload_end) = terminator?;
+    let payload = &source[payload_start..payload_end];
+    let kind = if is_safe_osc(payload) {
+        ControlKind::Metadata
+    } else {
+        ControlKind::Other
+    };
+    Some((end, kind))
+}
+
+fn parse_string_control(source: &[u8], payload_start: usize) -> Option<(usize, ControlKind)> {
+    let mut index = payload_start;
+    let mut utf8 = Utf8ContinuationState::default();
+    while index < source.len() {
+        let byte = source[index];
+        let utf8_state = utf8.advance(byte);
+        if byte == 0x9c
+            && matches!(
+                utf8_state,
+                Utf8ByteState::Other | Utf8ByteState::EncodedC1St
+            )
+        {
+            return Some((index + 1, ControlKind::Other));
+        }
+        if byte == 0x1b && source.get(index + 1) == Some(&b'\\') {
+            return Some((index + 2, ControlKind::Other));
+        }
+        index += 1;
+    }
+    None
+}
+
 /// These OSC commands carry terminal metadata or hyperlink destinations; they
 /// do not reposition the cursor or change the intensity state of visible text.
 #[must_use]
@@ -1076,7 +1357,11 @@ pub(crate) fn is_safe_osc(payload: &[u8]) -> bool {
 /// Latin output and intensity unchanged. Both occur in older fish prompt hooks.
 #[must_use]
 pub(crate) fn is_presentation_neutral_control(sequence: &[u8]) -> bool {
-    matches!(sequence, b"\x1b[?2004h" | b"\x1b[?2004l" | b"\x1b(B")
+    if sequence == b"\x1b(B" {
+        return true;
+    }
+    csi_parameter_start(sequence)
+        .is_some_and(|start| matches!(&sequence[start..], b"?2004h" | b"?2004l"))
 }
 
 #[must_use]
@@ -1092,11 +1377,11 @@ fn utf8_width(byte: u8) -> usize {
 
 #[must_use]
 fn sgr_params(sequence: &[u8]) -> Option<Vec<SgrParam>> {
-    if sequence.len() < 3 || sequence[0] != 0x1b || sequence[1] != b'[' || *sequence.last()? != b'm'
-    {
+    let parameter_start = csi_parameter_start(sequence)?;
+    if sequence.len() <= parameter_start || *sequence.last()? != b'm' {
         return None;
     }
-    let parameter_bytes = &sequence[2..sequence.len() - 1];
+    let parameter_bytes = &sequence[parameter_start..sequence.len() - 1];
     if !parameter_bytes
         .iter()
         .all(|byte| byte.is_ascii_digit() || matches!(*byte, b';' | b':'))
@@ -1156,6 +1441,18 @@ fn sgr_params(sequence: &[u8]) -> Option<Vec<SgrParam>> {
         }
     }
     Some(params)
+}
+
+fn csi_parameter_start(sequence: &[u8]) -> Option<usize> {
+    if sequence.starts_with(b"\x1b[") {
+        Some(2)
+    } else if sequence.first() == Some(&0x9b) {
+        Some(1)
+    } else if sequence.starts_with(b"\xc2\x9b") {
+        Some(2)
+    } else {
+        None
+    }
 }
 
 #[must_use]
@@ -1264,6 +1561,8 @@ fn graphemes(tokens: &[Token]) -> Vec<Grapheme> {
             } else {
                 classify_grapheme(value)
             },
+            extends_previous_word: !matches!(tokens[first.token].kind, TokenKind::Raw)
+                && grapheme_extends_letter(value),
         });
         map_index = last_index + 1;
     }
@@ -1278,13 +1577,24 @@ fn classify_grapheme(value: &str) -> GraphemeKind {
     if value.chars().next().is_some_and(is_word_connector) {
         return GraphemeKind::Connector;
     }
-    if value.chars().any(char::is_alphabetic) {
+    if is_letter_grapheme(value) {
         return GraphemeKind::Letter;
     }
     if value.chars().any(char::is_numeric) {
         return GraphemeKind::Number;
     }
     GraphemeKind::Other
+}
+
+fn grapheme_extends_letter(value: &str) -> bool {
+    let mut probe = String::with_capacity(value.len().saturating_add(1));
+    probe.push('a');
+    probe.push_str(value);
+    let mut graphemes = probe.graphemes(true);
+    let Some(first) = graphemes.next() else {
+        return false;
+    };
+    graphemes.next().is_none() && is_letter_grapheme(first)
 }
 
 #[must_use]
@@ -1306,6 +1616,25 @@ fn trailing_candidate_start(units: &[Grapheme]) -> Option<usize> {
         cursor -= 1;
     }
     Some(units[cursor].start_token)
+}
+
+fn trailing_raw_candidate_start(tokens: &[Token]) -> Option<usize> {
+    let last = tokens
+        .iter()
+        .rposition(|token| !matches!(token.kind, TokenKind::Control(_)))?;
+    if !matches!(tokens[last].kind, TokenKind::Raw) {
+        return None;
+    }
+    let mut start = last;
+    while start > 0
+        && matches!(
+            tokens[start - 1].kind,
+            TokenKind::Raw | TokenKind::Control(_)
+        )
+    {
+        start -= 1;
+    }
+    Some(start)
 }
 
 #[must_use]
@@ -1352,7 +1681,7 @@ fn trailing_grapheme_candidate_start(text: &str) -> Option<usize> {
 
 fn letter_grapheme_count(text: &str) -> usize {
     text.graphemes(true)
-        .filter(|grapheme| grapheme.chars().any(char::is_alphabetic))
+        .filter(|grapheme| is_letter_grapheme(grapheme))
         .count()
 }
 
@@ -1382,33 +1711,93 @@ fn chunk_can_extend_word(input: &[u8]) -> bool {
     })
 }
 
+fn chunk_can_extend_word_after_pending(pending: &[u8], appended: &[u8], open_word: bool) -> bool {
+    if chunk_can_extend_word(appended) {
+        return true;
+    }
+
+    if open_word {
+        if let Some(start) = incomplete_utf8_suffix_start(pending) {
+            let mut suffix = Vec::with_capacity(pending.len() - start + appended.len());
+            suffix.extend_from_slice(&pending[start..]);
+            suffix.extend_from_slice(appended);
+            if chunk_can_extend_word(&suffix) || chunk_can_extend_with_grapheme_extension(&suffix) {
+                return true;
+            }
+            // Keep an unresolved scalar or malformed suffix with the open
+            // word. Once it resolves to a complete delimiter, process it now.
+            if appended.iter().all(|byte| *byte >= 0x80) && str::from_utf8(&suffix).is_err() {
+                return true;
+            }
+            return false;
+        }
+
+        if appended.iter().all(|byte| *byte >= 0x80) {
+            if str::from_utf8(appended).is_err() {
+                // This may be a partial scalar or an invalid-byte run. Both
+                // need a following boundary before their relationship to the
+                // preceding word can be decided. The pending buffer is capped.
+                return true;
+            }
+            return chunk_can_extend_with_grapheme_extension(appended);
+        }
+    }
+
+    false
+}
+
+fn incomplete_utf8_suffix_start(input: &[u8]) -> Option<usize> {
+    for start in input.len().saturating_sub(3)..input.len() {
+        let width = utf8_width(input[start]);
+        if width < 2 || start + width <= input.len() {
+            continue;
+        }
+        let error = str::from_utf8(&input[start..]).err()?;
+        if error.error_len().is_none() && error.valid_up_to() == 0 {
+            return Some(start);
+        }
+    }
+    None
+}
+
+fn utf8_state_for_incomplete_suffix(input: &[u8]) -> Option<Utf8ContinuationState> {
+    if incomplete_utf8_suffix_start(input) != Some(0) {
+        return None;
+    }
+    let mut state = Utf8ContinuationState::default();
+    for byte in input.iter().copied() {
+        state.advance(byte);
+    }
+    (state.remaining > 0).then_some(state)
+}
+
+fn chunk_can_extend_with_grapheme_extension(input: &[u8]) -> bool {
+    let (tokens, _) = scan_tokens(input, /* eof */ false);
+    if tokens
+        .iter()
+        .any(|token| matches!(token.kind, TokenKind::Raw))
+    {
+        return false;
+    }
+    let (visible, _) = visible_text(&tokens);
+    let mut probe = String::with_capacity(visible.len().saturating_add(1));
+    probe.push('a');
+    probe.push_str(&visible);
+    probe.graphemes(true).all(|grapheme| {
+        matches!(
+            classify_grapheme(grapheme),
+            GraphemeKind::Letter
+                | GraphemeKind::Number
+                | GraphemeKind::Apostrophe
+                | GraphemeKind::Connector
+        )
+    })
+}
+
 impl DrainingControl {
     #[must_use]
     fn new(bytes: &[u8]) -> Self {
-        let mode = if bytes == b"\x1b" {
-            DrainMode::EscapeIntro
-        } else if bytes.starts_with(b"\x1b[") {
-            DrainMode::Csi
-        } else if bytes.starts_with(b"\x1b]") {
-            DrainMode::Osc {
-                previous_escape: bytes.last() == Some(&0x1b),
-            }
-        } else if bytes.starts_with(b"\x1bP")
-            || bytes.starts_with(b"\x1b^")
-            || bytes.starts_with(b"\x1b_")
-            || bytes.starts_with(b"\x1bX")
-        {
-            DrainMode::String {
-                previous_escape: bytes.last() == Some(&0x1b),
-            }
-        } else {
-            DrainMode::Escape {
-                intermediate: bytes
-                    .iter()
-                    .skip(1)
-                    .any(|byte| (0x20..=0x2f).contains(byte)),
-            }
-        };
+        let mode = control_mode(bytes).expect("incomplete control has a drain mode");
         Self {
             bytes: if bytes.len() <= MAX_PENDING {
                 bytes.to_vec()
@@ -1419,6 +1808,58 @@ impl DrainingControl {
             tracking: bytes.len() <= MAX_PENDING,
         }
     }
+}
+
+fn control_mode(bytes: &[u8]) -> Option<DrainMode> {
+    if bytes.first() == Some(&0x1b) {
+        return Some(if bytes == b"\x1b" {
+            DrainMode::EscapeIntro
+        } else if bytes.starts_with(b"\x1b[") {
+            DrainMode::Csi
+        } else if bytes.starts_with(b"\x1b]") {
+            DrainMode::Osc {
+                previous_escape: bytes.last() == Some(&0x1b),
+                utf8: string_utf8_state(bytes, 2),
+            }
+        } else if bytes.starts_with(b"\x1bP")
+            || bytes.starts_with(b"\x1b^")
+            || bytes.starts_with(b"\x1b_")
+            || bytes.starts_with(b"\x1bX")
+        {
+            DrainMode::String {
+                previous_escape: bytes.last() == Some(&0x1b),
+                utf8: string_utf8_state(bytes, 2),
+            }
+        } else {
+            DrainMode::Escape {
+                intermediate: bytes
+                    .iter()
+                    .skip(1)
+                    .any(|byte| (0x20..=0x2f).contains(byte)),
+            }
+        });
+    }
+
+    let (header_len, kind) = c1_control_intro(bytes, 0)?;
+    Some(match kind {
+        C1ControlKind::Csi => DrainMode::Csi,
+        C1ControlKind::Osc => DrainMode::Osc {
+            previous_escape: bytes.last() == Some(&0x1b),
+            utf8: string_utf8_state(bytes, header_len),
+        },
+        C1ControlKind::String => DrainMode::String {
+            previous_escape: bytes.last() == Some(&0x1b),
+            utf8: string_utf8_state(bytes, header_len),
+        },
+    })
+}
+
+fn string_utf8_state(bytes: &[u8], payload_start: usize) -> Utf8ContinuationState {
+    let mut state = Utf8ContinuationState::default();
+    for byte in bytes.iter().copied().skip(payload_start) {
+        state.advance(byte);
+    }
+    state
 }
 
 #[must_use]
@@ -1432,12 +1873,14 @@ fn drain_mode_complete(mode: &mut DrainMode, byte: u8) -> bool {
             b']' => {
                 *mode = DrainMode::Osc {
                     previous_escape: false,
+                    utf8: Utf8ContinuationState::default(),
                 };
                 false
             }
             b'P' | b'^' | b'_' | b'X' => {
                 *mode = DrainMode::String {
                     previous_escape: false,
+                    utf8: Utf8ContinuationState::default(),
                 };
                 false
             }
@@ -1448,19 +1891,38 @@ fn drain_mode_complete(mode: &mut DrainMode, byte: u8) -> bool {
             _ => true,
         },
         DrainMode::Csi => (0x40..=0x7e).contains(&byte),
-        DrainMode::Osc { previous_escape } => {
-            let complete = (*previous_escape && byte == b'\\') || byte == 0x07;
+        DrainMode::Osc {
+            previous_escape,
+            utf8,
+        } => {
+            let utf8_state = utf8.advance(byte);
+            let complete = (*previous_escape && byte == b'\\')
+                || byte == 0x07
+                || (byte == 0x9c
+                    && matches!(
+                        utf8_state,
+                        Utf8ByteState::Other | Utf8ByteState::EncodedC1St
+                    ));
             *previous_escape = byte == 0x1b;
             complete
         }
-        DrainMode::String { previous_escape } => {
-            let complete = *previous_escape && byte == b'\\';
+        DrainMode::String {
+            previous_escape,
+            utf8,
+        } => {
+            let utf8_state = utf8.advance(byte);
+            let complete = (*previous_escape && byte == b'\\')
+                || (byte == 0x9c
+                    && matches!(
+                        utf8_state,
+                        Utf8ByteState::Other | Utf8ByteState::EncodedC1St
+                    ));
             *previous_escape = byte == 0x1b;
             complete
         }
         DrainMode::Escape { intermediate } => {
             if *intermediate {
-                (0x30..=0x7e).contains(&byte)
+                !(0x20..=0x2f).contains(&byte)
             } else if (0x20..=0x2f).contains(&byte) {
                 *intermediate = true;
                 false
@@ -1534,6 +1996,28 @@ mod tests {
             }
         }
         output
+    }
+
+    fn assert_bytewise_scan_work_is_linear(input: &[u8], settings: &Settings) {
+        super::TOKEN_SCAN_BYTES.with(|counter| counter.set(0));
+        let expected = super::transform(input, settings, true);
+        let expected_scan_bytes = super::TOKEN_SCAN_BYTES.with(std::cell::Cell::get);
+        super::TOKEN_SCAN_BYTES.with(|counter| counter.set(0));
+
+        let mut renderer = Transformer::new(settings, true);
+        let mut actual = Vec::new();
+        for byte in input {
+            actual.extend(renderer.push(std::slice::from_ref(byte)));
+        }
+        actual.extend(renderer.finish());
+        let scanned_bytes = super::TOKEN_SCAN_BYTES.with(std::cell::Cell::get);
+
+        assert_eq!(actual, expected);
+        assert!(
+            scanned_bytes <= input.len().saturating_mul(12).saturating_add(64),
+            "token scanner revisited too much input: {scanned_bytes} bytes scanned for {} input bytes (slice reference scanned {expected_scan_bytes})",
+            input.len()
+        );
     }
 
     #[test]
@@ -1831,6 +2315,14 @@ mod tests {
             actual,
             b"\xc3\x9b\x1b[1mnic\x1b[22mode \x1b[1mread\x1b[22ming "
         );
+
+        let mut transformer = Transformer::new(&Settings::default(), true);
+        let mut actual = transformer.push(&[0xc2]);
+        assert!(actual.is_empty());
+        actual.extend(transformer.flush_pending());
+        actual.extend(transformer.push(b"\x9b reading "));
+        actual.extend(transformer.finish());
+        assert_eq!(actual, b"\xc2\x9b \x1b[1mread\x1b[22ming ");
     }
 
     #[test]
@@ -2014,6 +2506,51 @@ mod tests {
             super::transform(family.as_bytes(), &settings, true),
             family.as_bytes()
         );
+    }
+
+    #[test]
+    fn alphabetic_combining_marks_do_not_turn_punctuation_into_a_letter() {
+        let settings = Settings {
+            every: 6,
+            min_word_length: 1,
+            fraction: 0.75,
+            ..Settings::default()
+        };
+        let punctuation = b"\0/\xd8\x94";
+        let expected = super::transform(punctuation, &settings, true);
+        assert_eq!(expected, punctuation);
+
+        for width in 1..=punctuation.len() {
+            let mut renderer = Transformer::new(&settings, true);
+            let mut actual = Vec::new();
+            for chunk in punctuation.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected, "punctuation width={width}");
+        }
+
+        let arabic_base = "ب\u{0614}".as_bytes();
+        let expected = super::transform(arabic_base, &settings, true);
+        assert_ne!(expected, arabic_base);
+        let mut renderer = Transformer::new(&settings, true);
+        let mut actual = Vec::new();
+        for byte in arabic_base {
+            actual.extend(renderer.push(std::slice::from_ref(byte)));
+        }
+        actual.extend(renderer.finish());
+        assert_eq!(actual, expected);
+
+        let arabic_prepend = "\u{0600}ب".as_bytes();
+        let expected = super::transform(arabic_prepend, &settings, true);
+        assert_ne!(expected, arabic_prepend);
+        let mut renderer = Transformer::new(&settings, true);
+        let mut actual = Vec::new();
+        for byte in arabic_prepend {
+            actual.extend(renderer.push(std::slice::from_ref(byte)));
+        }
+        actual.extend(renderer.finish());
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -2284,6 +2821,222 @@ mod tests {
     }
 
     #[test]
+    fn c1_string_terminators_resume_osc_and_dcs_parsing() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (
+                b"\x1b]0;title\x9creading!",
+                b"\x1b]0;title\x9c\x1b[1mread\x1b[22ming!",
+            ),
+            (
+                b"\x1bPpayload\x9c\x1b[0mreading!",
+                b"\x1bPpayload\x9c\x1b[0m\x1b[1mread\x1b[22ming!",
+            ),
+            (
+                b"\x1b]0;title\xc2\x9creading!",
+                b"\x1b]0;title\xc2\x9c\x1b[1mread\x1b[22ming!",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                super::transform(input, &Settings::default(), true),
+                *expected
+            );
+            for width in [1, 2, 3, 7, input.len()] {
+                let mut renderer = Transformer::new(&Settings::default(), true);
+                let mut actual = Vec::new();
+                for chunk in input.chunks(width) {
+                    actual.extend(renderer.push(chunk));
+                }
+                actual.extend(renderer.finish());
+                assert_eq!(actual, *expected, "width={width}, input={input:?}");
+            }
+        }
+
+        let input = b"\x1b]0;title\xe2\x82\x9crest\x9creading!";
+        let expected = b"\x1b]0;title\xe2\x82\x9crest\x9c\x1b[1mread\x1b[22ming!";
+        assert_eq!(
+            super::transform(input, &Settings::default(), true),
+            expected
+        );
+        let mut renderer = Transformer::new(&Settings::default(), true);
+        let mut actual = renderer.push(b"\x1b]0;title\xe2\x82");
+        actual.extend(renderer.flush_pending());
+        actual.extend(renderer.push(b"\x9crest\x9creading!"));
+        actual.extend(renderer.finish());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn c1_string_terminators_resume_after_control_capacity_is_exceeded() {
+        let mut osc = b"\x1b]0;".to_vec();
+        osc.extend(std::iter::repeat_n(b'x', MAX_PENDING + 17));
+        osc.extend_from_slice(b"\xc2\x9c\x1b[0mreading!");
+
+        let mut dcs = b"\x1bP".to_vec();
+        dcs.extend(std::iter::repeat_n(b'x', MAX_PENDING + 17));
+        dcs.extend_from_slice(b"\x9c\x1b[0mreading!");
+
+        for input in [&osc, &dcs] {
+            let expected = super::transform(input, &Settings::default(), true);
+            let mut renderer = Transformer::new(&Settings::default(), true);
+            let mut actual = Vec::new();
+            let encoded_c1_st = input.starts_with(b"\x1b]0;");
+            let terminator_len = if encoded_c1_st { 2 } else { 1 };
+            let prefix_end = input.len() - terminator_len - b"\x1b[0mreading!".len();
+            for chunk in input[..prefix_end].chunks(4093) {
+                actual.extend(renderer.push(chunk));
+            }
+            if encoded_c1_st {
+                actual.extend(renderer.push(b"\xc2"));
+                actual.extend(renderer.push(b"\x9c\x1b[0mreading!"));
+            } else {
+                actual.extend(renderer.push(b"\x9c\x1b[0mreading!"));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn malformed_escape_intermediate_releases_following_bytes() {
+        let input = b"\x1b(\0\x1b[0mreading!";
+        let expected = b"\x1b(\0\x1b[0m\x1b[1mread\x1b[22ming!";
+        assert_eq!(
+            super::transform(input, &Settings::default(), true),
+            expected
+        );
+        for width in [1, 2, 3, 7, input.len()] {
+            let mut renderer = Transformer::new(&Settings::default(), true);
+            let mut actual = Vec::new();
+            for chunk in input.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected, "width={width}");
+        }
+
+        let mut renderer = Transformer::new(&Settings::default(), true);
+        assert!(renderer.push(b"\x1b(").is_empty());
+        let mut actual = renderer.push(b"\0\x1b[0mreading!");
+        actual.extend(renderer.finish());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn c1_sgr_controls_are_preserved_and_restore_input_style() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (
+                b"\x9b31mreading\x9b0m",
+                b"\x9b31m\x1b[1mread\x1b[22ming\x9b0m",
+            ),
+            (
+                b"\xc2\x9b31mreading\xc2\x9b0m",
+                b"\xc2\x9b31m\x1b[1mread\x1b[22ming\xc2\x9b0m",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                super::transform(input, &Settings::default(), true),
+                *expected
+            );
+            for width in [1, 2, 3, 7, input.len()] {
+                let mut renderer = Transformer::new(&Settings::default(), true);
+                let mut actual = Vec::new();
+                for chunk in input.chunks(width) {
+                    actual.extend(renderer.push(chunk));
+                }
+                actual.extend(renderer.finish());
+                assert_eq!(actual, *expected, "width={width}, input={input:?}");
+            }
+        }
+
+        let dim_input = b"\x9b31;2mreading\x9b22m";
+        let dim_expected = b"\x9b31;2m\x1b[1mread\x1b[22m\x1b[2ming\x9b22m";
+        assert_eq!(
+            super::transform(dim_input, &Settings::default(), true),
+            dim_expected
+        );
+
+        let ordinary_continuation = b"\xc3\x9breading!";
+        let output = super::transform(ordinary_continuation, &Settings::default(), true);
+        assert!(output.windows(2).any(|window| window == b"\xc3\x9b"));
+        assert_eq!(strip_emphasis(&output), ordinary_continuation);
+
+        for (prefix, suffix, expected) in [
+            (&b"\x9b31"[..], &b"mreading\x9b0m"[..], cases[0].1),
+            (&b"\xc2\x9b31"[..], &b"mreading\xc2\x9b0m"[..], cases[1].1),
+        ] {
+            let mut renderer = Transformer::new(&Settings::default(), true);
+            let mut streamed = renderer.push(prefix);
+            streamed.extend(renderer.flush_pending());
+            streamed.extend(renderer.push(suffix));
+            streamed.extend(renderer.finish());
+            assert_eq!(streamed, expected);
+        }
+    }
+
+    #[test]
+    fn c1_osc8_is_metadata_and_preserves_hyperlink_payload() {
+        let input = b"\x9d8;;https://example.test\x9creading\x9d8;;\x9c";
+        let expected = b"\x9d8;;https://example.test\x9c\x1b[1mread\x1b[22ming\x9d8;;\x9c";
+        assert_eq!(
+            super::transform(input, &Settings::default(), true),
+            expected
+        );
+        for width in [1, 2, 3, 7, input.len()] {
+            let mut renderer = Transformer::new(&Settings::default(), true);
+            let mut actual = Vec::new();
+            for chunk in input.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected, "width={width}");
+        }
+
+        let mut renderer = Transformer::new(&Settings::default(), true);
+        let mut streamed = renderer.push(b"\x9d8;;https://example.test");
+        streamed.extend(renderer.flush_pending());
+        streamed.extend(renderer.push(b"\x9creading\x9d8;;\x9c"));
+        streamed.extend(renderer.finish());
+        assert_eq!(streamed, expected);
+
+        let encoded_input = b"\xc2\x9d8;;https://example.test\xc2\x9creading\xc2\x9d8;;\xc2\x9c";
+        let encoded_expected =
+            b"\xc2\x9d8;;https://example.test\xc2\x9c\x1b[1mread\x1b[22ming\xc2\x9d8;;\xc2\x9c";
+        assert_eq!(
+            super::transform(encoded_input, &Settings::default(), true),
+            encoded_expected
+        );
+        for width in [1, 2, 3, 7, encoded_input.len()] {
+            let mut renderer = Transformer::new(&Settings::default(), true);
+            let mut actual = Vec::new();
+            for chunk in encoded_input.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, encoded_expected, "width={width}");
+        }
+    }
+
+    #[test]
+    fn oversized_c1_csi_drains_through_its_final_byte() {
+        let mut prefix = b"\x9b".to_vec();
+        prefix.extend(std::iter::repeat_n(b'1', MAX_PENDING + 17));
+        let mut input = prefix.clone();
+        input.extend_from_slice(b"m\x9b0mreading!");
+        let expected = super::transform(&input, &Settings::default(), true);
+
+        let mut renderer = Transformer::new(&Settings::default(), true);
+        let mut actual = Vec::new();
+        for chunk in prefix.chunks(4093) {
+            actual.extend(renderer.push(chunk));
+        }
+        actual.extend(renderer.push(b"m\x9b0mreading!"));
+        actual.extend(renderer.finish());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn incomplete_escape_after_timeout_is_drained_before_resuming() {
         let mut transformer = Transformer::new(&Settings::default(), true);
         assert!(transformer.push(b"\x1b").is_empty());
@@ -2387,6 +3140,127 @@ mod tests {
             let mut original = prefix.to_vec();
             original.extend_from_slice(b"payload\x1b\\\x1b[0mreading");
             assert_eq!(strip_emphasis(&output), original);
+        }
+    }
+
+    #[test]
+    fn bytewise_incomplete_control_scanning_is_linear() {
+        let mut osc = b"\x1b]0;".to_vec();
+        osc.extend(std::iter::repeat_n(b'x', 2048));
+        let mut dcs = b"\x1bP".to_vec();
+        dcs.extend(std::iter::repeat_n(b'x', 2048));
+        let mut csi = b"\x1b[".to_vec();
+        csi.extend(std::iter::repeat_n(b'1', 2048));
+
+        for input in [&osc, &dcs, &csi] {
+            assert_bytewise_scan_work_is_linear(input, &Settings::default());
+        }
+    }
+
+    #[test]
+    fn bytewise_unicode_prefix_scanning_is_linear_and_frequency_stable() {
+        let settings = Settings {
+            every: 2,
+            min_word_length: 1,
+            ..Settings::default()
+        };
+        let han = format!("{} alpha beta gamma", "界".repeat(512));
+        assert_bytewise_scan_work_is_linear(han.as_bytes(), &settings);
+
+        let combining = format!("a{} alpha beta gamma", "\u{301}".repeat(512));
+        assert_bytewise_scan_work_is_linear(combining.as_bytes(), &settings);
+    }
+
+    #[test]
+    fn oversized_combining_cluster_keeps_following_frequency_chunk_invariant() {
+        let settings = Settings {
+            every: 2,
+            min_word_length: 1,
+            ..Settings::default()
+        };
+        let input = format!("a{} beta gamma delta", "\u{301}".repeat(MAX_PENDING / 2));
+        let expected = super::transform(input.as_bytes(), &settings, true);
+        let mut renderer = Transformer::new(&settings, true);
+        let mut actual = Vec::new();
+        for byte in input.as_bytes() {
+            actual.extend(renderer.push(std::slice::from_ref(byte)));
+        }
+        actual.extend(renderer.finish());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn malformed_utf8_before_thai_is_chunk_invariant() {
+        let input = [
+            0x02, 0xa0, 0xe0, 0xb8, 0xb6, 0xe0, 0xb8, 0xa9, 0xe0, 0xb8, 0xb2, 0xe0, 0xb9, 0x84,
+            0xe0, 0xb8, 0x91, 0x3c, 0xe2, 0x80, 0x8d, 0xf0, 0x9f, 0xa0, 0xe5, 0xa5, 0xbd, 0xe4,
+            0x38, 0x96, 0xe7, 0x95, 0x8c, 0x20, 0xe6, 0x97, 0xa5, 0xe6, 0x68, 0xac, 0xe8, 0xaa,
+            0x9e, 0x20, 0xe0, 0xb8, 0xa0, 0xe0, 0xb8, 0xb2, 0xe0, 0xb8, 0xa9, 0xe0, 0xb8, 0xb2,
+            0xe0, 0xb9, 0x84, 0xe0, 0xb8, 0x91, 0x3c, 0xe2, 0x80, 0x8d, 0xf0, 0x9f, 0x91, 0xa6,
+        ];
+        let settings = Settings {
+            emphasis: Emphasis::Reverse,
+            ..Settings::default()
+        };
+        let expected = super::transform(&input, &settings, true);
+        for width in [1, 2, 3, 7, input.len()] {
+            let mut renderer = Transformer::new(&settings, true);
+            let mut actual = Vec::new();
+            for chunk in input.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected, "width={width}");
+        }
+    }
+
+    #[test]
+    fn oversized_mixed_script_runs_do_not_resegment_the_suffix_on_every_read() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(Debug)]
+        struct CountedSegmenter {
+            inner: crate::segmentation::UnicodeSegmenter,
+            calls: Arc<AtomicUsize>,
+        }
+        impl WordSegmenter for CountedSegmenter {
+            fn word_ranges(&self, text: &str) -> Vec<Range<usize>> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                self.inner.word_ranges(text)
+            }
+            fn terminal_trailing_word_start(&self, text: &str) -> Option<usize> {
+                self.inner.terminal_trailing_word_start(text)
+            }
+        }
+        // Minimized structure of the Linux sanitizer timeout (70,005 bytes).
+        let source = format!("{}ฟ{} next", "a".repeat(10_920), "a".repeat(59_077));
+        for every in [1, 2] {
+            let settings = Settings {
+                every,
+                ..Settings::new()
+            };
+            let expected = super::transform(source.as_bytes(), &settings, true);
+            for width in [1, 35, 8192] {
+                let calls = Arc::new(AtomicUsize::new(0));
+                let segmenter = CountedSegmenter {
+                    inner: crate::segmentation::UnicodeSegmenter::new(),
+                    calls: Arc::clone(&calls),
+                };
+                let mut renderer =
+                    super::Transformer::new_with_segmenter(&settings, true, Box::new(segmenter));
+                let mut output = Vec::new();
+                for chunk in source.as_bytes().chunks(width) {
+                    output.extend(renderer.push(chunk));
+                    assert!(
+                        calls.load(Ordering::Relaxed) <= 32,
+                        "segmentation work must be bounded independently of read size"
+                    );
+                }
+                output.extend(renderer.finish());
+                assert_eq!(output, expected, "every={every}, width={width}");
+            }
         }
     }
 }

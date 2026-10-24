@@ -326,18 +326,35 @@ fn stream_filter(
     output: &mut impl Write,
     policy: ControlPolicy,
 ) -> io::Result<()> {
+    stream_filter_from(
+        renderer,
+        output,
+        policy,
+        &mut io::stdin().lock(),
+        stdin_ready,
+    )
+}
+
+// Keep timed rendering independent of the inherited descriptor so interrupted reads,
+// readiness failures, and output failures can be verified without changing process stdin.
+fn stream_filter_from(
+    renderer: &mut Transformer,
+    output: &mut impl Write,
+    policy: ControlPolicy,
+    input: &mut impl Read,
+    mut ready: impl FnMut(i32) -> io::Result<bool>,
+) -> io::Result<()> {
     let mut controls = document::ControlFilter::new(policy);
-    let mut input = io::stdin().lock();
     let mut buffer = [0_u8; 8192];
     let mut flush_timer = PendingFlushTimer::default();
     loop {
         let wait = flush_timer.poll_timeout(Instant::now());
-        let ready = match stdin_ready(wait) {
+        let readable = match ready(wait) {
             Ok(ready) => ready,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
         };
-        if ready {
+        if readable {
             match input.read(&mut buffer) {
                 Ok(0) => {
                     output.write_all(&renderer.push(&controls.finish()))?;
@@ -516,5 +533,145 @@ mod tests {
 
         assert_eq!(timer.poll_timeout(start + Duration::from_secs(1)), -1);
         assert!(!timer.is_due(start + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn timed_filter_retries_interrupted_reads_and_readiness_without_losing_input() {
+        use std::io::{self, Read};
+        struct InterruptedInput {
+            interrupted: bool,
+            bytes: &'static [u8],
+        }
+        impl Read for InterruptedInput {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                self.bytes.read(buf)
+            }
+        }
+        let settings = bionic_reader::settings::Settings::default();
+        let source = b"reading\x1b[31m next\x1b[0m";
+        let mut input = InterruptedInput {
+            interrupted: false,
+            bytes: source,
+        };
+        let mut renderer = super::Transformer::new(&settings, true);
+        let mut output = Vec::new();
+        let mut polls = 0;
+        super::stream_filter_from(
+            &mut renderer,
+            &mut output,
+            super::ControlPolicy::Safe,
+            &mut input,
+            |_timeout| {
+                polls += 1;
+                if polls == 1 {
+                    Err(io::Error::from(io::ErrorKind::Interrupted))
+                } else {
+                    Ok(true)
+                }
+            },
+        )
+        .expect("interrupted operations are retried");
+        assert!(input.interrupted);
+        assert!(polls >= 4);
+        assert_eq!(
+            output,
+            bionic_reader::document::render(source, &settings, true)
+                .expect("render complete fixture")
+        );
+    }
+
+    #[test]
+    fn timed_filter_propagates_poll_read_write_and_flush_failures() {
+        use std::io::{self, Read, Write};
+        struct FailedInput;
+        impl Read for FailedInput {
+            fn read(&mut self, _bytes: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            }
+        }
+        struct FailedOutput {
+            flush_only: bool,
+        }
+        impl Write for FailedOutput {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.flush_only {
+                    Ok(buf.len())
+                } else {
+                    Err(io::Error::from(io::ErrorKind::BrokenPipe))
+                }
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+        }
+        let settings = bionic_reader::settings::Settings::default();
+        let mut renderer = super::Transformer::new(&settings, true);
+        let error = super::stream_filter_from(
+            &mut renderer,
+            &mut Vec::new(),
+            super::ControlPolicy::Safe,
+            &mut &b""[..],
+            |_| Err(io::Error::from(io::ErrorKind::InvalidInput)),
+        )
+        .expect_err("poll failure propagates");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let error = super::stream_filter_from(
+            &mut renderer,
+            &mut Vec::new(),
+            super::ControlPolicy::Safe,
+            &mut FailedInput,
+            |_| Ok(true),
+        )
+        .expect_err("read failure propagates");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        for flush_only in [false, true] {
+            let mut renderer = super::Transformer::new(&settings, true);
+            let error = super::stream_filter_from(
+                &mut renderer,
+                &mut FailedOutput { flush_only },
+                super::ControlPolicy::Safe,
+                &mut &b"reading "[..],
+                |_| Ok(true),
+            )
+            .expect_err("output failures propagate");
+            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        }
+    }
+
+    #[test]
+    fn timed_filter_flushes_an_unfinished_word_when_readiness_times_out() {
+        let settings = bionic_reader::settings::Settings::default();
+        let mut renderer = super::Transformer::new(&settings, true);
+        let mut output = Vec::new();
+        let mut polls = 0;
+        super::stream_filter_from(
+            &mut renderer,
+            &mut output,
+            super::ControlPolicy::Safe,
+            &mut &b"reading"[..],
+            |timeout| {
+                polls += 1;
+                if polls == 2 {
+                    assert!(
+                        timeout > 0,
+                        "unfinished words must arm a readiness deadline"
+                    );
+                    std::thread::sleep(PARTIAL_WORD_DEADLINE + Duration::from_millis(1));
+                    Ok(false)
+                } else {
+                    Ok(true)
+                }
+            },
+        )
+        .expect("a stalled partial word is emitted before the next read");
+        assert_eq!(polls, 3);
+        assert_eq!(
+            output, b"reading",
+            "low-latency fallback preserves the entire word"
+        );
     }
 }

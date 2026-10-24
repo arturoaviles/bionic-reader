@@ -5,7 +5,7 @@ use std::io::{self, Read};
 
 use bionic_reader::document::{self, ControlFilter};
 use bionic_reader::segmentation;
-use bionic_reader::settings::{ControlPolicy, OutputFormat, Settings};
+use bionic_reader::settings::{ControlPolicy, InputFormat, OutputFormat, Settings};
 use bionic_reader::transformer::{self, Transformer};
 use proptest::collection;
 use proptest::prelude::{ProptestConfig, Strategy, any};
@@ -43,7 +43,33 @@ impl Read for ChunkedInput<'_> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::default())]
+
+    #[test]
+    fn markdown_fixation_frequency_is_repeat_safe(
+        words in collection::vec(collection::vec(b'a'..=b'z', 1..24), 0..24),
+        every in 1usize..8,
+        minimum in 1usize..8,
+        fraction_step in 0u8..=4,
+    ) {
+        let source = words.into_iter()
+            .map(|word| word.into_iter().map(char::from).collect::<String>())
+            .collect::<Vec<_>>().join(" ");
+        let settings = Settings {
+            fraction: f64::from(fraction_step) / 4.0,
+            every,
+            min_word_length: minimum,
+            format: OutputFormat::Markdown,
+            ..Settings::default()
+        };
+        let once = document::render(source.as_bytes(), &settings, true)
+            .expect("render plain words as Markdown");
+        let twice = document::render(&once, &Settings {
+            input_format: InputFormat::Markdown,
+            ..settings
+        }, true).expect("reprocess generated Markdown");
+        prop_assert_eq!(twice, once);
+    }
 
     #[test]
     fn plain_unicode_preserves_bytes_and_is_repeat_safe(

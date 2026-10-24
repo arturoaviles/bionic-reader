@@ -16,6 +16,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: '1'
+  PROPTEST_CASES: '4096'
 
 jobs:
   rust:
@@ -44,14 +45,11 @@ jobs:
           echo "$RUNNER_TEMP/bionic-reader-node-tools/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Check and lint
         run: |
-          cargo fmt --all -- --check
-          cargo check --locked --all-targets
-          cargo clippy --locked --all-targets -- -D warnings
-          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
+          make help
+          make fmt-check check lint doc
       - name: Unit, CLI, and PTY tests
         run: |
-          cargo test --locked --all-targets
-          cargo test --locked --doc
+          make test test-doc
       - name: Verify bounded memory with a 40 MiB transformed stream
         run: |
           cargo build --locked --release --bin bionic-reader
@@ -74,7 +72,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Check generated completion files
-        run: scripts/check-completions.sh target/debug/bionic-reader
+        run: make completions-check
       - name: Test offline npm, Yarn PnP, and pnpm installs
         run: scripts/check-node-package-installs.sh target/debug/bionic-reader
 
@@ -116,8 +114,29 @@ jobs:
           cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --lcov --output-path target/coverage/lcov.info
           cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --html --output-dir target/coverage
           cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --show-missing-lines | tee target/coverage/summary.txt
+      - name: Summarize measured coverage against the requested target
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open('target/coverage/coverage.json', encoding='utf-8') as source:
+              totals = json.load(source)['data'][0]['totals']
+          metrics = ('lines', 'regions', 'functions', 'branches')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('### Measured Rust coverage\n\n')
+              summary.write('| Metric | Covered / total | Coverage | Target |\n')
+              summary.write('| --- | --- | --- | --- |\n')
+              for name in metrics:
+                  value = totals[name]
+                  summary.write(f"| {name} | {value['covered']} / {value['count']} | {value['percent']:.2f}% | 100% |\n")
+              reached = all(totals[name]['percent'] == 100 for name in metrics)
+              summary.write('\n100% target ' + ('reached.' if reached else 'remains open; see the uncovered-line and HTML artifacts.') + '\n')
+          if totals['branches']['percent'] < 80:
+              raise SystemExit('Branch coverage is below the transitional 80% floor')
+          PY
       - name: Prevent coverage regressions while closing the 100 percent target
-        run: cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --fail-under-lines 85 --fail-under-regions 80 --fail-under-functions 80
+        run: cargo llvm-cov report --ignore-filename-regex '/rustlib/src/rust/' --fail-under-lines 92 --fail-under-regions 91 --fail-under-functions 88
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -177,6 +196,7 @@ jobs:
       - name: Fuzz byte streams and document rendering with sanitizers
         run: |
           python3 - <<'PY'
+          import base64
           from pathlib import Path
           corpus = Path('fuzz/corpus/byte_stream')
           corpus.mkdir(parents=True, exist_ok=True)
@@ -187,11 +207,34 @@ jobs:
               b'# Heading\n\n[link](javascript:alert(1)) `code`\n```rust\nlet value = 1;\n```\n',
               b'word\xff\xfe\r\n\x1b[',
               b'a' * 70000 + b' next',
+              b'a' * 10920 + 'ฟ'.encode() + b'a' * 59077 + b' next',
+              base64.b64decode('AqDguLbguKnguLLguYTguJE84oCN8J+g5aW95DiW55WMIOaXpeZorOiqniDguKDguLLguKnguLLguYTguJE84oCN8J+Rpg=='),
+              b'\0\x1b]' + b'x' * 70000 + b'\x1b\\ next',
+              b'\0\x1bP' + b'x' * 70000 + b'\x1b\\ next',
+              b'\0\x1b[' + b'0' * 70000 + b'm next',
+              b'\0' + '漢'.encode() * 8192 + b' next',
+              b'\0a' + '\u0301'.encode() * 35000 + b' next',
+              b'\0\x1b]0;' + 'Üₜ'.encode() + b'\xc2\x9c next',
+              b'\0\x1bP' + 'Üₜ'.encode() + b'\x9c next',
+              b'\0\x1b(\0 next',
+              b'\0\x1b' + b'(' * 9000 + b'\0 next',
+              b'\0\x9b2;31mreading\x9b22m next\x9b0m',
+              b'\0\xc2\x9b2;31mreading\xc2\x9b22m next\xc2\x9b0m',
+              b'\0\x9d8;;https://example.test/\xc3\x9c\x9creading\x9d8;;\x9c',
+              b'\0/\xd8\x94',
           ]
           for index, seed in enumerate(seeds):
               (corpus / f'seed-{index}').write_bytes(seed)
           PY
           cargo +nightly-2026-10-22 fuzz run byte_stream -- -max_total_time=60 -max_len=131072 -timeout=10
+      - name: Upload reproducible fuzz failure inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure-inputs
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
 
   homebrew-local:
     name: Local Homebrew install (${{ matrix.runner }})

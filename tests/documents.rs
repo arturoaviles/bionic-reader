@@ -1,9 +1,11 @@
 //! Integration tests for safe document conversion and incremental control filtering.
 
 use std::io::{Cursor, Read, Write};
+use std::ops::Range;
 
-use bionic_reader::document::{ControlFilter, render, render_stream};
-use bionic_reader::settings::{ControlPolicy, InputFormat, OutputFormat, Settings, Style};
+use bionic_reader::document::{ControlFilter, render, render_stream, render_with_segmenter};
+use bionic_reader::segmentation::WordSegmenter;
+use bionic_reader::settings::{ControlPolicy, InputFormat, OutputFormat, Profile, Settings, Style};
 use pulldown_cmark::{Event, Parser};
 
 fn settings(input_format: InputFormat, format: OutputFormat) -> Settings {
@@ -40,6 +42,17 @@ impl Read for ChunkedReader<'_> {
         buf[..count].copy_from_slice(&self.bytes[..count]);
         self.bytes = &self.bytes[count..];
         Ok(count)
+    }
+}
+
+#[derive(Debug)]
+struct FinalTokenSegmenter;
+
+impl WordSegmenter for FinalTokenSegmenter {
+    fn word_ranges(&self, text: &str) -> Vec<Range<usize>> {
+        text.rfind("beta")
+            .map(|start| std::iter::once(start..start + "beta".len()).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -134,6 +147,105 @@ fn markdown_emphasis_is_idempotent_even_with_an_adjacent_suffix() {
         let output = render(source, &settings, true).expect("keep existing strong word intact");
         assert_eq!(output, source);
     }
+}
+
+#[test]
+fn markdown_frequency_is_idempotent_after_generated_partial_strong_prefixes() {
+    for every in [2, 3] {
+        let first_pass_settings = Settings {
+            input_format: InputFormat::Text,
+            format: OutputFormat::Markdown,
+            fraction: 0.5,
+            every,
+            min_word_length: 2,
+            ..Settings::default()
+        };
+        let source = b"documentation reading reflection response\r\nfinal word";
+        let first = render(source, &first_pass_settings, true).expect("render Markdown text");
+
+        let repeat_settings = Settings {
+            input_format: InputFormat::Markdown,
+            ..first_pass_settings
+        };
+        let second = render(&first, &repeat_settings, true).expect("render Markdown again");
+        assert_eq!(second, first, "every={every}");
+
+        let mut reader = Cursor::new(&first);
+        let mut streamed = Vec::new();
+        render_stream(&mut reader, &mut streamed, &repeat_settings, true)
+            .expect("stream Markdown again");
+        assert_eq!(streamed, first, "streaming every={every}");
+    }
+}
+
+#[test]
+fn markdown_frequency_is_idempotent_with_subtle_profile_and_long_partial_words() {
+    let mut first_pass_settings = Settings {
+        input_format: InputFormat::Text,
+        format: OutputFormat::Markdown,
+        ..Settings::default()
+    };
+    first_pass_settings.apply_profile(Profile::Subtle);
+    let source = b"documentation internationalization misunderstanding\r\n";
+    let first = render(source, &first_pass_settings, true).expect("render subtle Markdown");
+
+    let repeat_settings = Settings {
+        input_format: InputFormat::Markdown,
+        ..first_pass_settings
+    };
+    let second = render(&first, &repeat_settings, true).expect("render subtle Markdown again");
+    assert_eq!(second, first);
+}
+
+#[test]
+fn html_frequency_counts_existing_and_generated_strong_words_once() {
+    let text_options = Settings {
+        format: OutputFormat::Markdown,
+        fraction: 0.5,
+        every: 2,
+        min_word_length: 2,
+        ..Settings::default()
+    };
+    let source = b"documentation reading reflection response";
+    let markdown = render(source, &text_options, true).expect("generate Markdown prefixes");
+    let html_options = Settings {
+        input_format: InputFormat::Markdown,
+        format: OutputFormat::Html,
+        ..text_options
+    };
+    let html = render(&markdown, &html_options, true).expect("render generated Markdown as HTML");
+    assert_eq!(
+        html,
+        b"<p><strong>documen</strong>tation reading <strong>refle</strong>ction response</p>\n"
+    );
+}
+
+#[test]
+fn disabled_markdown_rendering_keeps_generated_emphasis_unchanged() {
+    let options = settings(InputFormat::Markdown, OutputFormat::Markdown);
+    let source = b"**on**e two **thr**ee four";
+    assert_eq!(
+        render(source, &options, false).expect("preserve existing Markdown emphasis"),
+        source
+    );
+}
+
+#[test]
+fn existing_strong_words_advance_markdown_frequency() {
+    let options = Settings {
+        input_format: InputFormat::Markdown,
+        format: OutputFormat::Markdown,
+        fraction: 0.5,
+        every: 2,
+        min_word_length: 2,
+        ..Settings::default()
+    };
+    let source = b"**documentation** reading reflection response\r\n";
+    let output = render(source, &options, true).expect("render Markdown with existing strong");
+    assert_eq!(
+        output,
+        b"**documentation** reading **refle**ction response\r\n"
+    );
 }
 
 #[test]
@@ -783,4 +895,287 @@ fn ansi_code_opt_in_emphasizes_inline_indented_and_fenced_code_without_rewriting
         plain.extend(strip.finish());
         assert_eq!(plain, source.as_bytes());
     }
+}
+
+#[test]
+fn custom_segmenter_drives_markdown_and_html_document_spans() {
+    let segmenter = FinalTokenSegmenter;
+    let source = b"alpha beta";
+    for (input_format, format, expected) in [
+        (
+            InputFormat::Text,
+            OutputFormat::Markdown,
+            b"alpha **beta**".as_slice(),
+        ),
+        (
+            InputFormat::Text,
+            OutputFormat::Html,
+            b"alpha <strong>beta</strong>".as_slice(),
+        ),
+        (
+            InputFormat::Markdown,
+            OutputFormat::Markdown,
+            b"alpha **beta**".as_slice(),
+        ),
+        (
+            InputFormat::Markdown,
+            OutputFormat::Html,
+            b"<p>alpha <strong>beta</strong></p>\n".as_slice(),
+        ),
+    ] {
+        let options = Settings {
+            fraction: 1.0,
+            input_format,
+            format,
+            ..Settings::default()
+        };
+        assert_eq!(
+            render_with_segmenter(source, &options, true, &segmenter)
+                .expect("render with caller-supplied word boundaries"),
+            expected,
+            "input_format={input_format:?}, format={format:?}"
+        );
+    }
+
+    let options = settings(InputFormat::Text, OutputFormat::Markdown);
+    assert_eq!(
+        render_with_segmenter(source, &options, false, &segmenter)
+            .expect("disable only added emphasis"),
+        source
+    );
+}
+
+#[test]
+fn plain_output_strips_controls_even_when_preserve_is_requested() {
+    let options = Settings {
+        input_format: InputFormat::Terminal,
+        format: OutputFormat::Plain,
+        controls: ControlPolicy::Preserve,
+        ..Settings::default()
+    };
+    let source = b"one\x1b[31mtwo\x1b]8;;https://example.test\x1b\\link\x1b]8;;\x1b\\\x07\xff";
+    assert_eq!(
+        render(source, &options, true).expect("plain output drops terminal controls"),
+        b"onetwolink\xff"
+    );
+    let mut reader = ChunkedReader {
+        bytes: source,
+        width: 2,
+    };
+    let mut output = Vec::new();
+    render_stream(&mut reader, &mut output, &options, true)
+        .expect("plain stream drops terminal controls");
+    assert_eq!(output, b"onetwolink\xff");
+}
+
+#[test]
+fn markdown_output_escapes_text_syntax_when_emphasis_is_disabled() {
+    let options = settings(InputFormat::Text, OutputFormat::Markdown);
+    let source = b"# [alpha] *beta* <tag>";
+    let output = render(source, &options, false).expect("escape Markdown control syntax");
+    assert_eq!(output, b"\\# \\[alpha\\] \\*beta\\* \\<tag\\>");
+    assert_eq!(
+        markdown_visible_text(&output),
+        String::from_utf8_lossy(source)
+    );
+}
+
+#[test]
+fn document_ansi_applies_the_selected_control_policy() {
+    let source = b"before\x1b[2Jafter";
+    let safe = settings(InputFormat::Text, OutputFormat::Ansi);
+    assert_eq!(
+        render(source, &safe, false).expect("filter unsafe terminal cursor control"),
+        b"beforeafter"
+    );
+
+    let preserve = Settings {
+        controls: ControlPolicy::Preserve,
+        ..safe
+    };
+    assert_eq!(
+        render(source, &preserve, false).expect("preserve explicit terminal controls"),
+        source
+    );
+}
+
+#[test]
+fn incomplete_escape_sequences_are_dropped_only_when_the_stream_finishes() {
+    for incomplete in [b"\x1b".as_slice(), b"\x1b[".as_slice(), b"\x1b]52;c;secret"] {
+        let mut filter = ControlFilter::new(ControlPolicy::Safe);
+        assert_eq!(filter.push(b"prefix"), b"prefix");
+        assert!(filter.push(incomplete).is_empty());
+        assert!(filter.finish().is_empty());
+    }
+
+    let mut malformed_utf8 = ControlFilter::new(ControlPolicy::Safe);
+    let bytes = b"x\xe2(\xa1y\xc2";
+    let mut output = malformed_utf8.push(bytes);
+    output.extend(malformed_utf8.finish());
+    assert_eq!(output, bytes);
+}
+
+#[test]
+fn oversized_intermediate_escape_stops_draining_at_an_invalid_boundary() {
+    let mut input = b"\x1b(".to_vec();
+    input.extend(std::iter::repeat_n(b'(', 9000));
+    input.extend_from_slice(b"\0kept");
+
+    let mut whole = ControlFilter::new(ControlPolicy::Safe);
+    let mut expected = whole.push(&input);
+    expected.extend(whole.finish());
+    assert_eq!(expected, b"kept");
+
+    for width in [1, 2, 31, 8193, input.len()] {
+        let mut filter = ControlFilter::new(ControlPolicy::Safe);
+        let mut output = Vec::new();
+        for chunk in input.chunks(width) {
+            output.extend(filter.push(chunk));
+        }
+        output.extend(filter.finish());
+        assert_eq!(output, expected, "width={width}");
+    }
+
+    let mut preserve = ControlFilter::new(ControlPolicy::Preserve);
+    let mut preserved = preserve.push(&input);
+    preserved.extend(preserve.finish());
+    assert_eq!(preserved, input);
+}
+
+#[test]
+fn string_controls_ignore_utf8_continuation_bytes_that_equal_c1_st() {
+    let mut safe_link = b"\x1b]8;;https://example.test/".to_vec();
+    safe_link.extend_from_slice("Üₜ".as_bytes());
+    safe_link.extend_from_slice(b"\x1b\\link\x1b]8;;\x1b\\");
+
+    let mut osc_title = b"\x1b]0;".to_vec();
+    osc_title.extend_from_slice("Üₜsecret".as_bytes());
+    osc_title.extend_from_slice(b"\x07visible");
+    let mut dcs_payload = b"\x1bP".to_vec();
+    dcs_payload.extend_from_slice("Üₜsecret".as_bytes());
+    dcs_payload.extend_from_slice(b"\x1b\\visible");
+    let encoded_st = b"\x1b]0;title\xc2\x9cvisible".to_vec();
+    for (input, expected) in [
+        (safe_link.as_slice(), safe_link.as_slice()),
+        (osc_title.as_slice(), b"visible".as_slice()),
+        (dcs_payload.as_slice(), b"visible".as_slice()),
+        (encoded_st.as_slice(), b"visible".as_slice()),
+    ] {
+        for width in [input.len(), 1, 2, 3] {
+            let mut filter = ControlFilter::new(ControlPolicy::Safe);
+            let mut output = Vec::new();
+            for chunk in input.chunks(width) {
+                output.extend(filter.push(chunk));
+            }
+            output.extend(filter.finish());
+            assert_eq!(output, expected, "width={width}, input={input:?}");
+        }
+    }
+
+    // A raw C1 ST still closes OSC when it is not the continuation of a valid UTF-8 scalar.
+    let mut raw_st = b"\x1b]0;title".to_vec();
+    raw_st.push(0x9c);
+    raw_st.extend_from_slice(b"visible");
+    let mut filter = ControlFilter::new(ControlPolicy::Safe);
+    let mut output = filter.push(&raw_st);
+    output.extend(filter.finish());
+    assert_eq!(output, b"visible");
+}
+
+#[test]
+fn oversized_string_draining_keeps_utf8_context_for_c1_st_detection() {
+    for (introducer, terminator) in [
+        (b"\x1b]0;".as_slice(), b"\x07".as_slice()),
+        (b"\x1bP".as_slice(), b"\x1b\\".as_slice()),
+    ] {
+        let mut filter = ControlFilter::new(ControlPolicy::Safe);
+        let mut oversized = introducer.to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', 9000));
+        assert!(filter.push(&oversized).is_empty());
+
+        let mut output = filter.push("Üₜsecret".as_bytes());
+        let mut closing = terminator.to_vec();
+        closing.extend_from_slice(b"visible");
+        output.extend(filter.push(&closing));
+        output.extend(filter.finish());
+        assert_eq!(output, b"visible", "introducer={introducer:?}");
+    }
+}
+
+#[test]
+fn oversized_string_transition_keeps_a_partial_utf8_prefix_for_c1_st_detection() {
+    for (introducer, terminator) in [
+        (b"\x1b]0;".as_slice(), b"\x07".as_slice()),
+        (b"\x1bP".as_slice(), b"\x1b\\".as_slice()),
+    ] {
+        for partial_utf8 in [b"\xc3".as_slice(), b"\xe2\x82"] {
+            let mut oversized = introducer.to_vec();
+            oversized.extend(std::iter::repeat_n(b'x', 9000));
+            oversized.extend_from_slice(partial_utf8);
+
+            let mut tail = vec![0x9c];
+            tail.extend_from_slice(b"secret");
+            tail.extend_from_slice(terminator);
+            tail.extend_from_slice(b"visible");
+
+            for width in 1..=tail.len() {
+                let mut filter = ControlFilter::new(ControlPolicy::Safe);
+                assert!(filter.push(&oversized).is_empty());
+                let mut output = Vec::new();
+                for chunk in tail.chunks(width) {
+                    output.extend(filter.push(chunk));
+                }
+                output.extend(filter.finish());
+                assert_eq!(
+                    output, b"visible",
+                    "introducer={introducer:?}, partial={partial_utf8:?}, width={width}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn reference_catalog_byte_limit_falls_back_safely_across_many_definitions() {
+    let mut source = String::new();
+    let destination_tail = "x".repeat(950);
+    for index in 0..1200 {
+        source.push_str(&format!(
+            "[r{index}]: https://example.test/{destination_tail}\n"
+        ));
+    }
+    source.push_str("\n<script>alert(1)</script> [click](javascript:alert(1))");
+    let options = settings(InputFormat::Markdown, OutputFormat::Markdown);
+    let mut output = Vec::new();
+    render_stream(
+        &mut Cursor::new(source.as_bytes()),
+        &mut output,
+        &options,
+        false,
+    )
+    .expect("oversized reference catalog falls back without unsafe markup");
+    let markdown = String::from_utf8(output).expect("Markdown output remains UTF-8");
+    assert!(!markdown.contains("<script>"), "{markdown:?}");
+    assert!(!markdown.contains("[click](javascript:"), "{markdown:?}");
+    assert!(
+        markdown_visible_text(markdown.as_bytes())
+            .ends_with("<script>alert(1)</script> [click](javascript:alert(1))")
+    );
+}
+
+#[test]
+fn render_entry_points_reject_invalid_settings_before_reading_or_writing() {
+    let options = Settings {
+        every: 0,
+        ..Settings::default()
+    };
+    let error = render(b"reading", &options, true).expect_err("invalid every setting");
+    assert!(error.is_invalid_input());
+
+    let mut input = Cursor::new(b"reading");
+    let mut output = Vec::new();
+    let error = render_stream(&mut input, &mut output, &options, true)
+        .expect_err("stream rejects invalid settings before reading input");
+    assert!(error.is_invalid_input());
+    assert!(output.is_empty());
 }

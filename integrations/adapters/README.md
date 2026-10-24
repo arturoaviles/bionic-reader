@@ -1,8 +1,10 @@
 # Framework adapters
 
 Each adapter activates the same shell initializer as `bionic-reader init`.
-The executable must already be on `PATH`. Packages include these directories
-under `share/bionic-reader/integrations/adapters`; a source checkout uses this
+The executable must already be on `PATH`. Local native archives, Homebrew,
+Linux system packages, Snap, Python wheels, and npm-family packages carry these
+directories under `share/bionic-reader/integrations/adapters`. Cargo source
+installation installs only the executable; a source checkout uses this
 directory directly. Copy only the adapter for your framework. Installation of
 the executable never edits shell configuration.
 

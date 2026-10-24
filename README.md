@@ -332,7 +332,7 @@ bionic-reader --style always -t 'Save the emphasized text.' > reading.ansi
 printf 'Original text\n' | bionic-reader --style never
 ```
 
-The default `--style auto` adds emphasis only on terminal stdout, honoring nonempty `NO_COLOR` and `TERM=dumb`. `--style always` explicitly overrides these hints; `--style never` adds no emphasis. Safe document input preserves presentation styling while removing active terminal controls. Choose `--controls preserve` or `--input-format terminal` for trusted, byte-preserving terminal input. With no `-t`, an interactive standard input shows help instead of waiting for text.
+The default `--style auto` adds emphasis only on terminal stdout, honoring nonempty `NO_COLOR` and `TERM=dumb`. `--style always` explicitly overrides these hints; `--style never` adds no emphasis. For ANSI output, the default safe policy keeps recognized presentation controls and removes other terminal controls. Use `--controls preserve` or `--input-format terminal` only for trusted ANSI input; plain output always removes controls. With no `-t`, an interactive standard input shows help instead of waiting for text.
 
 Tune word selection with `--fraction`, `--every`, and `--min-word-length`:
 
@@ -340,7 +340,7 @@ Tune word selection with `--fraction`, `--every`, and `--min-word-length`:
 bionic-reader -t 'Read the first part of each word.' --fraction 0.4 --every 2
 ```
 
-`fraction` is a finite value from `0` to `1`; `every` and `min-word-length` must be positive integers. The default fraction is `0.5`, default frequency is `1`, and default minimum length is `2`. Word boundaries use ICU4X Unicode segmentation, including dictionary/LSTM data for Chinese, Japanese, Thai, and other complex scripts. Emphasis boundaries use extended grapheme clusters, so accents and emoji sequences stay intact. Only letter graphemes count toward fixation length; digits and emoji receive no added emphasis. Internal apostrophes stay within words and hyphens separate segments. Dictionary segmentation is a default, not a promise of perfect linguistic analysis for every language; the library accepts custom segmenters.
+`fraction` is a finite value from `0` to `1`; `every` and `min-word-length` must be positive integers. The default fraction is `0.5`, default frequency is `1`, and default minimum length is `2`. Word boundaries use ICU4X Unicode word segmentation and its automatic complex-script data. Emphasis boundaries use extended grapheme clusters, so accents and emoji sequences stay intact. Only letter graphemes count toward fixation length; digits and emoji receive no added emphasis. Internal apostrophes stay within words, while hyphens separate segments. Automatic segmentation is not a promise of perfect linguistic analysis for every language; the library accepts custom segmenters.
 
 ## Document formats and safe input
 
@@ -360,20 +360,28 @@ command-producing-terminal-output | bionic-reader --input-format terminal
 ```
 
 `--format ansi|plain|markdown|html` selects a representation; `--style` controls
-added emphasis. Markdown/HTML exports add emphasis even when stdout is redirected,
-unless `--style never` is selected. Plain output strips terminal escapes and adds
-no markup. Markdown source processing protects code, link destinations, escapes,
-and entities. Use `--skip-code=false` to emphasize code in ANSI or HTML output; Markdown export requires code protection because CommonMark code cannot contain emphasis without changing its literal content. HTML output escapes raw HTML
+whether emphasis is added. Markdown/HTML exports add emphasis even when stdout
+is redirected, unless `--style never` is selected. Markdown always uses
+CommonMark `**strong**` syntax, regardless of `--emphasis`. HTML uses strong or
+underline markup; reverse emphasis emits a `bionic-reverse` class that requires
+CSS in the consuming page. Plain output strips terminal controls and adds no
+markup. Markdown source processing protects code, link destinations, escapes,
+and entities. For Markdown input, `--skip-code=false` allows code emphasis in
+ANSI or HTML output; Markdown-to-Markdown output rejects that setting because
+CommonMark code cannot contain emphasis without changing its literal content.
+HTML output escapes raw HTML
 and removes unsafe link schemes. When reprocessing exported Markdown, select
 `--input-format markdown`; ordinary text input treats markup as literal text.
 
-Document input defaults to `--controls safe`. Active controls such as clipboard
-commands, cursor movement, DCS, and unsafe hyperlinks are removed. Tabs, line
-endings, and ordinary content are retained. Reading sessions preserve terminal
-controls because shell applications require them. Safe filtering therefore
-preserves visible content rather than arbitrary active control bytes. ANSI/plain
-processing preserves malformed UTF-8 bytes outside removed controls; Markdown and
-HTML conversion report invalid UTF-8 as an error.
+ANSI document input defaults to `--controls safe`, which retains SGR styling
+and safe OSC 8 hyperlinks while removing active controls such as clipboard
+commands, cursor movement, DCS, and unsafe hyperlinks. Tabs, line endings, and
+ordinary content are retained. Use `--controls preserve` or
+`--input-format terminal` with ANSI output only for trusted terminal bytes.
+Plain output always strips controls; reading sessions preserve terminal
+controls because shell applications require them. ANSI/plain processing
+preserves malformed UTF-8 bytes outside removed controls; Markdown and HTML
+conversion report invalid UTF-8 as an error.
 
 Normal filtering is deterministic across input chunking and delays. It waits for
 a complete word or passes oversized words through at the 64 KiB pending bound.
@@ -382,7 +390,11 @@ For live streams, `--low-latency` flushes a stalled partial word unchanged after
 sessions retain this latency behavior. This explicit mode can change which words
 receive emphasis depending on input timing.
 
-Markdown streaming spools input to disk and parses bounded blocks. A block or reference-definition catalog exceeding 1 MiB uses an unstyled literal fallback, with Markdown/HTML escaping as appropriate; document size itself is unlimited by the streaming API. The in-memory Markdown slice API accepts up to 8 MiB; use `render_stream` for larger documents.
+Markdown streaming spools input to disk and parses bounded blocks. A block or
+reference-definition catalog exceeding 1 MiB uses an unstyled literal fallback,
+with Markdown/HTML escaping as appropriate; document size itself is unlimited
+by the streaming API. The in-memory Markdown-input API accepts up to 8 MiB; use
+`render_stream` for larger Markdown documents.
 
 ## Fixation profiles and preview
 
@@ -660,15 +672,47 @@ All seven adapters are exercised through their pinned upstream loaders. See [ada
 
 ## Shell completions
 
-Generate definitions for your shell:
+The CLI generates Bash, Zsh, and fish completions. To install them manually
+from any executable, write the generated definitions to your user completion
+directories:
 
 ```sh
-bionic-reader completions bash
-bionic-reader completions zsh
-bionic-reader completions fish
+mkdir -p "$HOME/.local/share/bash-completion/completions"
+bionic-reader completions bash > "$HOME/.local/share/bash-completion/completions/bionic-reader"
 ```
 
-The generated files are also in `completions/`. Source `completions/bionic-reader.bash` in Bash, place `_bionic-reader` on Zsh's `fpath` before `compinit`, or copy `bionic-reader.fish` to your fish configuration's `completions` directory. Cargo's source installation installs only the executable; it does not install these files or edit shell configuration.
+```zsh
+mkdir -p "$HOME/.zfunc"
+bionic-reader completions zsh > "$HOME/.zfunc/_bionic-reader"
+```
+
+```fish
+mkdir -p "$__fish_config_dir/completions"
+bionic-reader completions fish > "$__fish_config_dir/completions/bionic-reader.fish"
+```
+
+Add the directory to `fpath` in `~/.zshrc` **before** `compinit` or before
+loading a framework that runs it:
+
+```zsh
+fpath=("$HOME/.zfunc" $fpath)
+```
+
+If your startup file does not already initialize Zsh completion, add:
+
+```zsh
+autoload -Uz compinit
+compinit
+```
+
+Bash must have its completion loader enabled to discover the user completion
+directory. Alternatively, add `source "$HOME/.local/share/bash-completion/completions/bionic-reader"`
+to `~/.bashrc`. The fish command uses its active configuration directory, including
+a custom `XDG_CONFIG_HOME`. The checked-in files under `completions/` can also be sourced or
+copied when working from a checkout. Homebrew and Linux system packages install
+completions in their shell-specific locations; other binary packages include
+the files under `share/bionic-reader/completions`. Cargo source installation
+installs only the executable and does not edit shell configuration.
 
 ## Platforms and candidate packaging
 
@@ -694,14 +738,6 @@ MIT. See [LICENSE](LICENSE).
 
 ## Tests and measured coverage
 
-`cargo test --locked --all-targets` runs unit tests, generated properties, CLI/file-pipeline end-to-end tests, and real PTY tests for reader and shell sessions. `scripts/check-frameworks.sh` additionally fetches seven pinned upstream frameworks and verifies their real startup paths. CI also compiles, installs, runs, and removes repository-built packages through every documented package-manager route.
+`cargo test --locked --all-targets` runs unit tests, generated properties, CLI/file-pipeline end-to-end tests, and real PTY tests for reader and shell sessions. `scripts/check-frameworks.sh` additionally fetches seven pinned upstream frameworks and verifies their real startup paths. CI also compiles, installs, runs, and removes repository-built packages through every documented package-manager route. See [CONTRIBUTING.md](CONTRIBUTING.md) for common Makefile commands and local coverage and fuzz workflows.
 
-The coverage job uploads HTML, JSON, LCOV, and an uncovered-line report as the `coverage-reports` artifact. The goal is 100%; the current coverage and remaining gaps are recorded in [the verification report](docs/verification.md). Production files are not excluded to improve the percentage. Reproduce the instrumented suite with:
-
-```sh
-rustup toolchain install nightly-2026-10-22 --profile minimal --component llvm-tools-preview
-cargo +nightly-2026-10-22 install cargo-llvm-cov --version 0.9.1 --locked
-cargo +nightly-2026-10-22 llvm-cov --branch --locked --all-targets --html
-```
-
-Use `cargo +nightly-2026-10-22 llvm-cov report --show-missing-lines` to inspect gaps, or add `--fail-under-lines 100` to check the target strictly. Line, region, function, and branch percentages are separate measurements; passing end-to-end tests does not imply complete coverage.
+The coverage job uploads HTML, JSON, LCOV, and an uncovered-line report as the `coverage-reports` artifact. Current measurements and remaining gaps are recorded in [the verification report](docs/verification.md). Production files are included in the report; line, region, function, and branch measurements are separate, and passing end-to-end tests does not imply complete coverage.

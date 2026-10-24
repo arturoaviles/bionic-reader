@@ -1,24 +1,76 @@
 # Contributing
 
-Contributions should preserve the product decisions in [docs/design.md](docs/design.md), the vocabulary in [GLOSSARY.md](GLOSSARY.md), and the architecture boundary in [docs/adr/0001-session-wide-terminal-transformation.md](docs/adr/0001-session-wide-terminal-transformation.md).
+Contributions should preserve the product decisions in [docs/design.md](docs/design.md), the vocabulary in [GLOSSARY.md](GLOSSARY.md), and the architecture boundaries in [ADR 0001](docs/adr/0001-session-wide-terminal-transformation.md) and [ADR 0002](docs/adr/0002-document-rendering-and-reader.md). ADR 0002 expands the original terminal MVP to multilingual documents and the interactive reader.
 
 Rust code follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html) and [Microsoft's Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html). Read [the project's Rust style policy](docs/rust-style.md) for its application to this Cargo CLI, documented exceptions, and automated enforcement.
 
 ## Development checks
 
-Use Rust 1.85.1 for the declared minimum compiler. Run the same checks as CI before submitting changes:
+Use Rust 1.85.1 for the declared minimum compiler. The root Makefile works with GNU Make 3.81 or newer, including macOS's system Make. Start with:
+
+```sh
+make help
+make verify
+make test-e2e
+make run ARGS='--style always -t "Reading documentation"'
+make release
+```
+
+`make verify` runs formatting, type checking, Clippy, all Rust tests, Rustdoc tests/documentation, completion drift checks, and distribution source checks. Formatting, type checking, and linting include the separate fuzz workspace. `make test-e2e` runs executable, reader, reading-session, terminal, and completion workflows. `make test-unit` runs library and CLI unit tests. `scripts/check-quality.sh` invokes `make verify` and also audits both lockfiles if cargo-audit is installed.
+
+`make install` installs this checkout into Cargo's configured installation root; `make uninstall` removes that Cargo installation. `make smoke` checks the built executable and a real terminal session. Use `make completions` after changing CLI arguments to regenerate all three checked-in completion files, then run `make completions-check`.
+
+The Makefile honors `CARGO_TARGET_DIR`, including for completion and smoke-test binary paths. Override `CARGO`, `PYTHON`, or `NIGHTLY` when needed; `ARGS` supplies arguments to `make run`. Nightly defaults to CI's `nightly-2026-10-22`. Make targets do not install development tools or publish packages. `make frameworks` fetches upstream framework checkouts; `make audit` can update the advisory database.
+
+The equivalent individual Rust checks are:
 
 ```sh
 cargo fmt --all -- --check
+cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
 cargo check --locked --all-targets
+cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 cargo test --locked --all-targets
 cargo test --locked --doc
+scripts/check-completions.sh "${CARGO_TARGET_DIR:-target}/debug/bionic-reader"
 scripts/check-distribution.sh
 ```
 
-The test suite includes unit, CLI, and PTY/session coverage. Session tests need the shells they exercise. Distribution checks require Bash, Zsh, fish, ShellCheck, Node.js, Python 3, Ruff, and mypy. For dependency advisories, install the pinned `cargo-audit` version listed by CI and run `cargo audit` when its advisory database is reachable. A missing tool is a local environment setup issue; CI installs the required checkers explicitly.
+The test suite includes unit, property, CLI, document, and PTY/reader/session coverage. Terminal tests need Bash, Zsh, and fish; Node.js is needed for launcher tests. Distribution checks also require ShellCheck, Python 3, Ruff, mypy, and Ruby. Checking the fuzz workspace requires a C++ compiler. For dependency advisories, install the pinned `cargo-audit` version listed by CI and run `make audit` when its advisory database is reachable. A missing tool is a local environment setup issue; CI installs the required checkers explicitly.
+
+CI runs each generated property with `PROPTEST_CASES=4096`. The local Proptest default is 256; use `PROPTEST_CASES=4096 make test` for the same case count. The test configuration honors this environment variable.
+
+## Coverage and fuzzing
+
+Install the pinned nightly coverage tool, then generate line/branch coverage and HTML:
+
+```sh
+rustup toolchain install nightly-2026-10-22 --profile minimal --component llvm-tools-preview
+cargo +nightly-2026-10-22 install cargo-llvm-cov --version 0.9.1 --locked
+make coverage
+```
+
+Open `target/coverage/html/index.html`, or the equivalent path under `CARGO_TARGET_DIR`. This instruments the default test suite; the seven network-dependent framework tests are ignored until explicitly requested. To include those real startup workflows as CI does, use the same instrumented build directory throughout:
+
+```sh
+(
+  export RUSTUP_TOOLCHAIN=nightly-2026-10-22
+  export CARGO_TARGET_DIR="$PWD/target/coverage-build"
+  export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR"
+  cargo llvm-cov clean --workspace
+  cargo llvm-cov --branch --locked --all-targets --no-report
+  eval "$(cargo llvm-cov show-env --branch --sh)"
+  scripts/check-frameworks.sh
+  cargo llvm-cov report --show-missing-lines
+  cargo llvm-cov report --html --output-dir target/coverage
+)
+```
+
+Clean the instrumented workspace after source changes before taking a fresh measurement; stale object files can distort the report. CI uploads HTML, JSON, LCOV, and uncovered-line artifacts and compares the measurements with the requested 100% target. Current results and remaining gaps are recorded in [docs/verification.md](docs/verification.md). Passing the transitional coverage floors does not mean the target has been reached.
+
+For sanitizer fuzzing, install `cargo +nightly-2026-10-22 install cargo-fuzz --version 0.13.2 --locked`, then run `make fuzz`. It uses a 60-second campaign, a 128 KiB maximum input, and a ten-second per-input timeout, matching CI. See [fuzz/README.md](fuzz/README.md) for reproduction and regression-case instructions. `make bench` runs the transformer benchmarks.
 
 ## Additional Rust verification and benchmarks
 
@@ -66,7 +118,7 @@ gitleaks git --log-opts="--all" --redact=100 --no-banner --exit-code=1 .
 
 ## Cargo crate validation
 
-Cargo is a first-release distribution route through crates.io. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling.
+Cargo currently installs from this checkout, its Git source, or an extracted local `.crate`; no Bionic Reader package has been published to crates.io. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling. The development Makefile belongs to the Git checkout; packaged-source tests run with Cargo directly.
 
 From a clean checkout, run:
 

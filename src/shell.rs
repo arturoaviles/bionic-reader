@@ -23,17 +23,8 @@ use crate::Error;
 ///
 /// Returns an error when `shell` does not name `bash`, `zsh`, or `fish`.
 ///
-/// # Panics
-///
-/// Panics if the shell normalization logic returns a name without a template.
 pub fn init(shell: &str) -> Result<String, Error> {
-    let shell = normalize_shell(shell)?;
-    let template = match shell {
-        "bash" => include_str!("../integrations/bash.sh"),
-        "zsh" => include_str!("../integrations/zsh.sh"),
-        "fish" => include_str!("../integrations/fish.fish"),
-        _ => unreachable!("normalize_shell returned an unsupported shell"),
-    };
+    let (_, template) = shell_template(shell)?;
     Ok(template.to_owned())
 }
 
@@ -43,10 +34,15 @@ pub fn init(shell: &str) -> Result<String, Error> {
 ///
 /// Returns an error when the basename is not `bash`, `zsh`, or `fish`.
 pub(crate) fn normalize_shell(shell: &str) -> Result<&'static str, Error> {
+    shell_template(shell).map(|(name, _template)| name)
+}
+
+// Resolve the name and integration together so they cannot disagree at runtime.
+fn shell_template(shell: &str) -> Result<(&'static str, &'static str), Error> {
     match shell.rsplit('/').next().unwrap_or(shell) {
-        "bash" => Ok("bash"),
-        "zsh" => Ok("zsh"),
-        "fish" => Ok("fish"),
+        "bash" => Ok(("bash", include_str!("../integrations/bash.sh"))),
+        "zsh" => Ok(("zsh", include_str!("../integrations/zsh.sh"))),
+        "fish" => Ok(("fish", include_str!("../integrations/fish.fish"))),
         other => Err(Error::invalid_input(format!(
             "unsupported shell `{other}`; expected bash, zsh, or fish"
         ))),

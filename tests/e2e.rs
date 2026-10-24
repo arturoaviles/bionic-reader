@@ -154,3 +154,123 @@ fn explicit_text_works_when_home_and_config_environment_are_absent() {
     assert_eq!(output.stdout, b"reading");
     assert!(output.stderr.is_empty());
 }
+
+#[test]
+fn unreadable_configuration_is_a_usage_error_with_no_output() {
+    let home = tempfile::tempdir().expect("create workflow home");
+    let output = invoke(
+        home.path(),
+        &[
+            "--config",
+            home.path().to_str().expect("UTF-8 fixture path"),
+            "-t",
+            "reading",
+        ],
+        b"",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not read configuration file"));
+}
+
+#[test]
+fn bypass_rejects_incomplete_session_environment_without_running_the_command() {
+    let home = tempfile::tempdir().expect("create workflow home");
+    let marker = home.path().join("should-not-exist");
+    for stage in 0..3 {
+        let mut process = command(home.path());
+        process.env_remove("BIONIC_READER_MARKER_TOKEN");
+        if stage > 0 {
+            process.env("BIONIC_READER_SESSION", "1");
+        }
+        if stage > 1 {
+            process.env("BIONIC_READER_MARKER_TOKEN", "test-token");
+        }
+        let output = process
+            .args(["bypass", "--", "touch"])
+            .arg(&marker)
+            .output()
+            .expect("run invalid bypass");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let expected = match stage {
+            0 => "requires an active reading session",
+            1 => "no marker token",
+            _ => "no control socket",
+        };
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        assert!(
+            !marker.exists(),
+            "invalid bypass must not spawn its command"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn output_device_failures_report_on_stderr_for_each_cli_rendering_path() {
+    for args in [
+        vec!["-t", "reading"],
+        vec!["--format", "html", "-t", "reading"],
+        vec!["preview", "--print"],
+        vec!["init", "bash"],
+        vec!["completions", "bash"],
+        vec!["completions", "fish"],
+        vec!["--low-latency"],
+    ] {
+        let home = tempfile::tempdir().expect("create workflow home");
+        let mut child = command(home.path())
+            .args(&args)
+            .stdin(if args.contains(&"--low-latency") {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(
+                fs::File::options()
+                    .write(true)
+                    .open("/dev/full")
+                    .expect("open full device"),
+            )
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run output failure workflow");
+        if let Some(mut input) = child.stdin.take() {
+            input.write_all(b"reading\n").expect("send small fixture");
+        }
+        let output = child.wait_with_output().expect("collect device failure");
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("No space left on device"),
+            "{args:?}: {:?}",
+            output.stderr
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unreadable_stdin_reports_a_runtime_error_for_streaming_and_document_paths() {
+    let home = tempfile::tempdir().expect("create workflow home");
+    for args in [
+        vec![],
+        vec!["--low-latency"],
+        vec!["--format", "plain"],
+        vec!["--input-format", "markdown", "--format", "html"],
+    ] {
+        // Linux permits opening a directory for reading; read(2) then returns EISDIR.
+        let input = fs::File::open(home.path()).expect("open directory input");
+        let output = command(home.path())
+            .args(&args)
+            .stdin(input)
+            .output()
+            .expect("run unreadable input workflow");
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Is a directory"),
+            "{args:?}: {:?}",
+            output.stderr
+        );
+    }
+}

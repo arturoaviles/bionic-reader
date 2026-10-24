@@ -1583,41 +1583,55 @@ fn search_last_before(file: &mut File, query: &[u8], before: u64) -> io::Result<
     if query.is_empty() || before == 0 {
         return Ok(None);
     }
-    file.seek(SeekFrom::Start(0))?;
-    let mut scanned = 0_u64;
-    let mut bytes = Vec::with_capacity(IO_BUFFER_SIZE + query.len());
-    let mut buffer = vec![0_u8; IO_BUFFER_SIZE];
-    let mut found = None;
-    while scanned < before {
-        let request = usize::try_from((before - scanned).min(IO_BUFFER_SIZE as u64))
-            .expect("bounded search read fits in usize");
-        let count = file.read(&mut buffer[..request])?;
-        if count == 0 {
-            break;
-        }
-        let base = scanned - bytes.len() as u64;
-        bytes.extend_from_slice(&buffer[..count]);
-        if let Some(index) = bytes
+    let end = before.min(file.metadata()?.len());
+    let query_length = u64::try_from(query.len()).expect("query length fits in u64");
+    if query_length > end {
+        return Ok(None);
+    }
+
+    let overlap = query.len().saturating_sub(1);
+    let mut upper = end;
+    let mut carry = Vec::new();
+    while upper > 0 {
+        let chunk_start = upper.saturating_sub(u64::try_from(IO_BUFFER_SIZE).expect("buffer fits"));
+        let chunk_length = usize::try_from(upper - chunk_start)
+            .expect("bounded backward search read fits in usize");
+        file.seek(SeekFrom::Start(chunk_start))?;
+        let mut chunk = vec![0_u8; chunk_length];
+        file.read_exact(&mut chunk)?;
+
+        let mut combined = chunk;
+        let candidate_starts = combined.len();
+        combined.extend_from_slice(&carry);
+        if let Some(index) = combined
             .windows(query.len())
+            .take(candidate_starts)
             .rposition(|window| window == query)
         {
-            found = Some(base + index as u64);
+            return Ok(Some(
+                chunk_start
+                    .checked_add(u64::try_from(index).expect("match offset fits in u64"))
+                    .expect("document offset fits in u64"),
+            ));
         }
-        let keep = query.len().saturating_sub(1).min(bytes.len());
-        bytes.drain(..bytes.len() - keep);
-        scanned += count as u64;
+
+        let keep = overlap.min(combined.len());
+        carry = combined[..keep].to_vec();
+        upper = chunk_start;
     }
-    Ok(found)
+    Ok(None)
 }
 
 #[cfg(test)]
 mod unit_tests {
     use super::{
-        Dimensions, Document, Key, KeyBuffer, PlainTextFilter, Position, Reader, emphasize_row,
-        help_row, is_dumb_terminal, spool_document,
+        Dimensions, Document, Key, KeyBuffer, PlainTextFilter, Position, Reader, SignalWatcher,
+        Terminal, emphasize_row, help_row, is_dumb_terminal, spool_document, status_text,
+        truncate_cells,
     };
-    use crate::settings::{InputFormat, Settings, Style};
-    use std::io::Cursor;
+    use crate::settings::{Emphasis, InputFormat, Profile, Settings, Style};
+    use std::fs::File;
+    use std::io::{self, Cursor, Read, Seek, SeekFrom};
     use std::time::{Duration, Instant};
     use unicode_width::UnicodeWidthStr;
 
@@ -1670,6 +1684,70 @@ mod unit_tests {
     }
 
     #[test]
+    fn plain_text_filter_handles_split_malformed_and_incomplete_utf8() {
+        let mut filter = PlainTextFilter::default();
+        assert_eq!(filter.push(b"\xc3"), b"");
+        assert_eq!(filter.push(b"\xa9"), "é".as_bytes());
+        assert_eq!(filter.push(b"\xe0"), b"");
+        assert_eq!(filter.push(b"\x80\x80x"), "�x".as_bytes());
+        assert_eq!(filter.push(b"\xe2z"), "�z".as_bytes());
+        assert_eq!(filter.push(b"\xf5\xff"), "��".as_bytes());
+        assert_eq!(filter.push(b"\xe2\x82"), b"");
+        assert_eq!(filter.finish(), "�".as_bytes());
+    }
+
+    #[test]
+    fn spooling_and_document_search_preserve_io_errors_with_context() {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed source"))
+            }
+        }
+
+        let error = spool_document(&mut FailedRead).expect_err("propagate source read errors");
+        assert!(error.to_string().contains("could not read document"));
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::BrokenPipe));
+
+        let directory = File::open(".").expect("open a directory as a file");
+        let mut broken_document = Document {
+            file: directory,
+            line_starts: vec![0],
+            protected_ranges: Vec::new(),
+            length: 1,
+        };
+        let error = broken_document
+            .find_forward(b"x", 0)
+            .expect_err("report failed reads from the indexed source");
+        assert!(error.to_string().contains("could not search document"));
+        assert!(error.io_kind().is_some());
+    }
+
+    #[test]
+    fn markdown_index_rejects_invalid_utf8_and_oversized_blocks_safely() {
+        let mut invalid = tempfile::tempfile().expect("create a Markdown fixture");
+        std::io::Write::write_all(&mut invalid, b"invalid \xff\n").expect("write invalid Markdown");
+        invalid
+            .seek(SeekFrom::Start(0))
+            .expect("rewind Markdown fixture");
+        let error = Document::new(invalid, true, true).expect_err("reject invalid Markdown UTF-8");
+        assert!(error.is_invalid_input());
+        assert!(
+            error
+                .to_string()
+                .contains("Markdown input must be valid UTF-8")
+        );
+
+        let oversized_source = vec![b'x'; super::MAX_MARKDOWN_BLOCK_BYTES + 1];
+        let mut oversized_input = Cursor::new(oversized_source);
+        let file = spool_document(&mut oversized_input).expect("spool oversized Markdown block");
+        let document = Document::new(file, true, false).expect("index oversized Markdown block");
+        assert!(document.is_protected(0));
+        assert!(document.is_protected(document.length - 1));
+    }
+
+    #[test]
     fn wrapped_rows_preserve_graphemes_and_cell_width() {
         let mut document = document("a👩‍💻e\u{301}界z".as_bytes());
         let first = document.row(Document::start(), 4).expect("read first row");
@@ -1679,6 +1757,129 @@ mod unit_tests {
             .expect("read next row");
         assert_eq!(second.text, "界z");
         assert_eq!(second.next, None);
+    }
+
+    #[test]
+    fn wrapping_expands_tabs_replaces_wide_cells_and_clamps_positions() {
+        let mut document = document("\t界x".as_bytes());
+        let tab = document
+            .row(Document::start(), 4)
+            .expect("expand a leading tab");
+        assert_eq!(tab.text, "    ");
+        assert_eq!(tab.next, Some(Position { line: 0, offset: 1 }));
+
+        let wide = document
+            .row(tab.next.expect("tab is followed by a wide glyph"), 1)
+            .expect("replace a glyph wider than the viewport");
+        assert_eq!(wide.text, "�");
+        assert_eq!(wide.next, Some(Position { line: 0, offset: 4 }));
+
+        let tail = document
+            .row(wide.next.expect("wide glyph is followed by text"), 0)
+            .expect("treat a zero-column terminal as one cell wide");
+        assert_eq!(tail.text, "x");
+        assert_eq!(tail.next, None);
+
+        let empty_at_end = document
+            .row(
+                Position {
+                    line: 0,
+                    offset: u64::MAX,
+                },
+                10,
+            )
+            .expect("clamp a stale offset to the line end");
+        assert!(empty_at_end.text.is_empty());
+        assert_eq!(empty_at_end.next, None);
+    }
+
+    #[test]
+    fn rows_keep_zero_width_text_bounded_and_do_not_split_the_next_grapheme() {
+        let source = "\u{200b}".repeat(super::MAX_VIEW_GRAPHEME_BYTES / 3 + 2);
+        let mut document = document(source.as_bytes());
+        let first = document
+            .row(Document::start(), 1)
+            .expect("read zero-width graphemes in a narrow viewport");
+        assert!(first.text.len() <= super::MAX_VIEW_GRAPHEME_BYTES);
+        let next = first
+            .next
+            .expect("the view buffer should stop at its byte bound");
+        assert!(next.offset > 0);
+        let second = document
+            .row(next, 1)
+            .expect("continue from a complete grapheme boundary");
+        assert!(!second.text.is_empty());
+    }
+
+    #[test]
+    fn row_viewport_tracks_protected_ranges_and_final_empty_rows() {
+        let source = b"`protected` readable\n\n";
+        let mut input = Cursor::new(source.to_vec());
+        let file = spool_document(&mut input).expect("spool Markdown row fixture");
+        let mut document = Document::new(file, true, true).expect("index Markdown row fixture");
+        let row = document
+            .row(Document::start(), 80)
+            .expect("read a row with adjacent protected ranges");
+        assert_eq!(row.text, "`protected` readable");
+        assert_eq!(row.protected_ranges, vec![0..11]);
+        assert_eq!(
+            row.next,
+            Some(Position {
+                line: 1,
+                offset: 21
+            })
+        );
+
+        let blank = document
+            .row(
+                Position {
+                    line: 1,
+                    offset: 21,
+                },
+                80,
+            )
+            .expect("read an empty row");
+        assert!(blank.text.is_empty());
+        assert_eq!(
+            blank.next,
+            Some(Position {
+                line: 2,
+                offset: 22
+            })
+        );
+        let final_row = document
+            .row(
+                Position {
+                    line: usize::MAX,
+                    offset: 0,
+                },
+                80,
+            )
+            .expect("clamp a stale line number to the final row");
+        assert!(final_row.text.is_empty());
+        assert_eq!(final_row.next, None);
+    }
+
+    #[test]
+    fn grapheme_reader_preserves_a_multibyte_scalar_split_at_the_io_boundary() {
+        let prefix = "x".repeat(super::IO_BUFFER_SIZE - 1);
+        let source = format!("{prefix}é👩‍💻tail");
+        let mut document = document(source.as_bytes());
+        let row = document
+            .row(Document::start(), super::IO_BUFFER_SIZE + 16)
+            .expect("read UTF-8 and grapheme sequences spanning chunks");
+        assert!(row.text.ends_with("é👩‍💻tail"));
+    }
+
+    #[test]
+    fn grapheme_cursor_keeps_emoji_joiners_across_a_file_chunk_boundary() {
+        let prefix = "x".repeat(super::IO_BUFFER_SIZE - "👩\u{200d}".len());
+        let source = format!("{prefix}👩‍💻tail");
+        let mut document = document(source.as_bytes());
+        let row = document
+            .row(Document::start(), super::IO_BUFFER_SIZE + 16)
+            .expect("read an emoji grapheme spanning a file chunk");
+        assert!(row.text.ends_with("👩‍💻tail"));
     }
 
     #[test]
@@ -1806,6 +2007,50 @@ mod unit_tests {
     }
 
     #[test]
+    fn navigation_clamps_at_document_edges_and_maps_offsets_to_visual_rows() {
+        let mut document = document(b"abcdef\nxy\n");
+        let start = Document::start();
+        assert_eq!(document.move_up(start, 3).expect("stay at start"), start);
+        let wrapped = Position { line: 0, offset: 3 };
+        assert_eq!(
+            document
+                .move_up(wrapped, 3)
+                .expect("move to first wrapped row"),
+            start
+        );
+        assert_eq!(
+            document
+                .move_up(Position { line: 1, offset: 7 }, 3)
+                .expect("move from the second line to the preceding line"),
+            Position { line: 0, offset: 3 }
+        );
+        assert_eq!(
+            document
+                .move_down(Position { line: 1, offset: 7 }, 3, 3)
+                .expect("stop at the last document row"),
+            Position {
+                line: 2,
+                offset: 10
+            }
+        );
+        assert_eq!(
+            document
+                .position_for_offset(4, 3)
+                .expect("map a byte offset into a wrapped row"),
+            Position { line: 0, offset: 3 }
+        );
+        assert_eq!(
+            document
+                .position_for_offset(100, 3)
+                .expect("clamp an offset beyond the document"),
+            Position {
+                line: 2,
+                offset: 10
+            }
+        );
+    }
+
+    #[test]
     fn input_decoder_handles_arrows_utf8_and_escape_timeout() {
         let now = Instant::now();
         let mut keys = KeyBuffer::default();
@@ -1863,6 +2108,43 @@ mod unit_tests {
             Some(first + 11)
         );
     }
+
+    #[test]
+    fn search_handles_empty_queries_bounds_and_matches_longer_than_a_chunk() {
+        let mut small = document(b"abc abc");
+        assert_eq!(
+            small.find_forward(b"", 0).expect("empty forward query"),
+            None
+        );
+        assert_eq!(
+            small
+                .find_forward(b"abc", small.length)
+                .expect("search at EOF"),
+            None
+        );
+        assert_eq!(
+            small.find_last_before(b"", 4).expect("empty reverse query"),
+            None
+        );
+        assert_eq!(
+            small.find_last_before(b"abc", 0).expect("empty bound"),
+            None
+        );
+        assert_eq!(
+            small.find_last_before(b"abc abc", 6).expect("short bound"),
+            None
+        );
+
+        let query = vec![b'a'; super::IO_BUFFER_SIZE + 7];
+        let text = vec![b'a'; super::IO_BUFFER_SIZE * 3];
+        let mut large = document(&text);
+        assert_eq!(
+            large
+                .find_last_before(&query, large.length)
+                .expect("scan a query spanning multiple reverse chunks"),
+            Some(u64::try_from(text.len() - query.len()).expect("match offset fits in u64"))
+        );
+    }
     #[test]
     fn giant_graphemes_are_consumed_without_splitting_or_retaining_their_bytes() {
         let source = format!("a{}tail", "\u{301}".repeat(100_000));
@@ -1912,49 +2194,174 @@ mod unit_tests {
             None
         );
     }
+
     #[test]
-    fn reader_navigation_settings_and_search_editing_cover_all_controls() {
+    fn backward_search_finds_a_match_crossing_a_chunk_edge_with_exclusive_bounds() {
+        let mut text = vec![b'x'; super::IO_BUFFER_SIZE * 2];
+        let query = b"match across the reverse chunk edge";
+        let start = super::IO_BUFFER_SIZE - 5;
+        text[start..start + query.len()].copy_from_slice(query);
+        let mut document = document(&text);
+        let match_start = u64::try_from(start).expect("match start fits in u64");
+        let match_end = match_start
+            .checked_add(u64::try_from(query.len()).expect("query length fits in u64"))
+            .expect("match end fits in u64");
+
+        assert_eq!(
+            document
+                .find_last_before(query, document.length)
+                .expect("search across the chunk edge"),
+            Some(match_start)
+        );
+        assert_eq!(
+            document
+                .find_last_before(query, match_end - 1)
+                .expect("exclusive bound omits an incomplete match"),
+            None
+        );
+        assert_eq!(
+            document
+                .find_last_before(query, match_end)
+                .expect("exclusive bound includes a complete match"),
+            Some(match_start)
+        );
+    }
+    #[test]
+    fn reader_navigation_keys_move_by_visual_rows_and_pages() {
         let mut document = document(b"first needle\nsecond needle\nlast\n");
         let mut reader = Reader::new(Settings::new());
         let size = Dimensions {
             rows: 3,
             columns: 8,
         };
-        for key in [
-            Key::Down,
-            Key::Up,
-            Key::PageDown,
-            Key::PageUp,
-            Key::End,
-            Key::Home,
+        for (key, expected) in [
+            (Key::Down, Position { line: 0, offset: 8 }),
+            (Key::Up, Position { line: 0, offset: 0 }),
+            (
+                Key::PageDown,
+                Position {
+                    line: 1,
+                    offset: 13,
+                },
+            ),
+            (Key::PageUp, Position { line: 0, offset: 0 }),
+            (
+                Key::End,
+                Position {
+                    line: 3,
+                    offset: 32,
+                },
+            ),
+            (Key::Home, Position { line: 0, offset: 0 }),
         ] {
             assert!(
                 !reader
                     .handle_key(key, &mut document, size)
                     .expect("navigate")
             );
+            assert_eq!(reader.position, expected, "{key:?}");
         }
-        for key in [
-            '+', '-', '[', ']', 'm', 'M', 's', '?', '?', 'p', 'p', 'p', 'p',
+    }
+
+    #[test]
+    fn reader_settings_keys_change_values_and_cycle_profiles() {
+        let mut document = document(b"first needle\nsecond needle\nlast\n");
+        let mut reader = Reader::new(Settings::new());
+        let size = Dimensions {
+            rows: 3,
+            columns: 8,
+        };
+        let initial_fraction = reader.settings.fraction;
+        let initial_minimum = reader.settings.min_word_length;
+        for (key, every, minimum, fraction) in [
+            ('+', 1, initial_minimum, initial_fraction + 0.05),
+            ('-', 1, initial_minimum, initial_fraction),
+            ('[', 1, initial_minimum, initial_fraction),
+            (']', 2, initial_minimum, initial_fraction),
+            (
+                'm',
+                2,
+                initial_minimum.saturating_sub(1).max(1),
+                initial_fraction,
+            ),
+            ('M', 2, initial_minimum, initial_fraction),
         ] {
             assert!(
                 !reader
                     .handle_key(Key::Character(key), &mut document, size)
                     .expect("adjust settings")
             );
+            assert_eq!(reader.settings.every, every, "key {key}");
+            assert_eq!(reader.settings.min_word_length, minimum, "key {key}");
+            assert!(
+                (reader.settings.fraction - fraction).abs() < 0.000_001,
+                "key {key}: {}",
+                reader.settings.fraction
+            );
+            assert!(reader.settings.profile.is_none(), "key {key}");
         }
+
+        assert!(
+            !reader
+                .handle_key(Key::Character('s'), &mut document, size)
+                .expect("hide settings")
+        );
+        assert!(!reader.show_settings);
+        assert!(
+            !reader
+                .handle_key(Key::Character('s'), &mut document, size)
+                .expect("show settings")
+        );
+        assert!(reader.show_settings);
+        assert!(
+            !reader
+                .handle_key(Key::Character('?'), &mut document, size)
+                .expect("show help")
+        );
+        assert!(reader.show_help);
+        assert!(
+            !reader
+                .handle_key(Key::Character('?'), &mut document, size)
+                .expect("close help")
+        );
+        assert!(!reader.show_help);
+        for profile in [
+            Profile::Subtle,
+            Profile::Balanced,
+            Profile::Strong,
+            Profile::Subtle,
+        ] {
+            reader
+                .handle_key(Key::Character('p'), &mut document, size)
+                .expect("cycle profiles");
+            assert_eq!(reader.settings.profile, Some(profile));
+        }
+    }
+
+    #[test]
+    fn reader_search_keys_edit_query_find_next_previous_and_cancel() {
+        let mut document = document(b"first needle\nsecond needle\nlast\n");
+        let mut reader = Reader::new(Settings::new());
+        let size = Dimensions {
+            rows: 3,
+            columns: 8,
+        };
         reader
             .handle_key(Key::Character('/'), &mut document, size)
             .expect("open search");
+        assert_eq!(reader.search_input.as_deref(), Some(""));
         reader
             .handle_key(Key::Character('x'), &mut document, size)
             .expect("type query");
+        assert_eq!(reader.search_input.as_deref(), Some("x"));
         reader
             .handle_key(Key::Backspace, &mut document, size)
             .expect("edit query");
+        assert_eq!(reader.search_input.as_deref(), Some(""));
         reader
             .handle_key(Key::Left, &mut document, size)
             .expect("ignore navigation in search");
+        assert_eq!(reader.search_input.as_deref(), Some(""));
         for character in "needle".chars() {
             reader
                 .handle_key(Key::Character(character), &mut document, size)
@@ -1968,10 +2375,18 @@ mod unit_tests {
             .handle_key(Key::Character('n'), &mut document, size)
             .expect("next match");
         assert_eq!(reader.search_match, Some(20));
+        assert_eq!(
+            reader.position,
+            Position {
+                line: 1,
+                offset: 13
+            }
+        );
         reader
             .handle_key(Key::Character('N'), &mut document, size)
             .expect("previous match");
         assert_eq!(reader.search_match, Some(6));
+        assert_eq!(reader.position, Position { line: 0, offset: 0 });
         reader
             .handle_key(Key::Character('/'), &mut document, size)
             .expect("open search");
@@ -1984,6 +2399,79 @@ mod unit_tests {
                 .handle_key(Key::ControlC, &mut document, size)
                 .expect("quit")
         );
+    }
+
+    #[test]
+    fn search_wraps_at_document_edges_and_preserves_position_when_unmatched() {
+        let mut document = document(b"needle middle needle");
+        let mut reader = Reader::new(Settings::new());
+        reader.search_query = "needle".to_owned();
+        let size = Dimensions {
+            rows: 4,
+            columns: 80,
+        };
+
+        reader
+            .handle_key(Key::Character('N'), &mut document, size)
+            .expect("previous match wraps from the beginning");
+        assert_eq!(reader.search_match, Some(14));
+        reader.position = Document::start();
+        reader
+            .handle_key(Key::Character('n'), &mut document, size)
+            .expect("next match wraps from the end");
+        assert_eq!(reader.search_match, Some(0));
+
+        reader.search_query = "not present".to_owned();
+        let old_position = reader.position;
+        let old_match = reader.search_match;
+        reader
+            .handle_key(Key::Character('n'), &mut document, size)
+            .expect("an unmatched search is harmless");
+        assert_eq!(reader.position, old_position);
+        assert_eq!(reader.search_match, old_match);
+
+        reader.search_query.clear();
+        reader
+            .handle_key(Key::Character('N'), &mut document, size)
+            .expect("an empty search is a no-op");
+        assert_eq!(reader.position, old_position);
+    }
+
+    #[test]
+    fn settings_keys_clamp_numeric_values_and_clear_a_selected_profile() {
+        let mut document = document(b"settings");
+        let mut reader = Reader::new(Settings {
+            fraction: 0.0,
+            every: 1,
+            min_word_length: 1,
+            profile: Some(Profile::Strong),
+            ..Settings::new()
+        });
+        let size = Dimensions {
+            rows: 2,
+            columns: 20,
+        };
+        for key in ['-', '[', 'm'] {
+            reader
+                .handle_key(Key::Character(key), &mut document, size)
+                .expect("minimum settings remain valid");
+        }
+        assert_eq!(reader.settings.fraction.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(reader.settings.every, 1);
+        assert_eq!(reader.settings.min_word_length, 1);
+        assert!(reader.settings.profile.is_none());
+
+        reader.settings.fraction = 1.0;
+        reader.settings.every = usize::MAX;
+        reader.settings.min_word_length = usize::MAX;
+        for key in ['+', ']', 'M'] {
+            reader
+                .handle_key(Key::Character(key), &mut document, size)
+                .expect("maximum settings remain valid");
+        }
+        assert_eq!(reader.settings.fraction.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(reader.settings.every, usize::MAX);
+        assert_eq!(reader.settings.min_word_length, usize::MAX);
     }
 
     #[test]
@@ -2057,5 +2545,150 @@ mod unit_tests {
         let frame = String::from_utf8(frame).expect("screen frame is UTF-8");
         assert_eq!(frame.matches("only row").count(), 1, "{frame:?}");
         assert!(frame.contains("\x1b[2;1H\x1b[2K\x1b[3;1H"), "{frame:?}");
+    }
+
+    #[test]
+    fn viewport_and_status_render_help_search_profiles_and_unicode_truncation() {
+        let mut document = document("a wide界 row\nsecond\n".as_bytes());
+        let mut reader = Reader::new(Settings {
+            style: Style::Never,
+            ..Settings::new()
+        });
+        reader.show_help = true;
+        let help = super::build_frame(
+            &mut document,
+            &reader,
+            Dimensions {
+                rows: 9,
+                columns: 12,
+            },
+        )
+        .expect("build a small help viewport");
+        let help = String::from_utf8(help).expect("help frame is UTF-8");
+        assert!(help.contains("Bionic Reade"), "{help:?}");
+        assert!(help.contains("q, Esc, or "), "{help:?}");
+
+        reader.show_help = false;
+        reader.search_input = Some("partial".to_owned());
+        assert_eq!(status_text(&document, &reader), "/partial");
+        let searching = super::build_frame(
+            &mut document,
+            &reader,
+            Dimensions {
+                rows: 2,
+                columns: 8,
+            },
+        )
+        .expect("build a search viewport");
+        let searching = String::from_utf8(searching).expect("search frame is UTF-8");
+        assert!(searching.contains("/partial"), "{searching:?}");
+
+        reader.search_input = None;
+        reader.show_settings = true;
+        reader.search_query = "done".to_owned();
+        for (profile, label, emphasis, attribute) in [
+            (Profile::Subtle, "subtle", Emphasis::Bold, "bold"),
+            (
+                Profile::Balanced,
+                "balanced",
+                Emphasis::Underline,
+                "underline",
+            ),
+            (Profile::Strong, "strong", Emphasis::Reverse, "reverse"),
+        ] {
+            reader.settings.profile = Some(profile);
+            reader.settings.emphasis = emphasis;
+            let status = status_text(&document, &reader);
+            assert!(status.contains(&format!("attr {attribute}")), "{status}");
+            assert!(status.contains(&format!("preset {label}")), "{status}");
+            assert!(status.contains("| /done"), "{status}");
+        }
+        assert_eq!(help_row(usize::MAX, 8), Vec::<u8>::new());
+        assert_eq!(truncate_cells("界x", 1), "");
+        assert_eq!(truncate_cells("界x", 2), "界");
+    }
+
+    #[test]
+    fn terminal_event_loop_reports_input_errors_and_restores_screen_on_drop() {
+        let input = File::open(".").expect("open a directory for a failing input stream");
+        let output = tempfile::tempfile().expect("create a captured terminal output");
+        let mut captured = output
+            .try_clone()
+            .expect("clone terminal output for assertions");
+        // SAFETY: `libc::termios` is a plain C state value; the invalid descriptor
+        // used by this test makes restoration fail harmlessly and the result is never read.
+        let original = unsafe { std::mem::zeroed() };
+        let mut terminal = Terminal {
+            input,
+            output,
+            original,
+            screen_entered: true,
+        };
+        let mut document = document(b"event loop input error");
+        let mut reader = Reader::new(Settings::new());
+        let signals = SignalWatcher::new().expect("register temporary signal watcher");
+        let error = reader
+            .event_loop(&mut terminal, &mut document, &signals)
+            .expect_err("report an input error from the terminal");
+        assert!(error.to_string().contains("could not read terminal input"));
+        drop(terminal);
+        captured
+            .seek(SeekFrom::Start(0))
+            .expect("rewind captured terminal output");
+        let mut output = Vec::new();
+        captured
+            .read_to_end(&mut output)
+            .expect("read terminal output after cleanup");
+        assert!(
+            output
+                .windows(b"\x1b[?1049l".len())
+                .any(|bytes| bytes == b"\x1b[?1049l"),
+            "the alternate screen should be restored after the input error"
+        );
+    }
+
+    #[test]
+    fn terminal_setup_and_render_errors_keep_their_operation_context() {
+        let input = File::open("/dev/null").expect("open harmless terminal input");
+        let output = File::open(".").expect("open a directory as a failing output stream");
+        // SAFETY: `libc::termios` is a plain C state value; this test only exercises
+        // terminal writes and does not depend on the saved value's contents.
+        let original = unsafe { std::mem::zeroed() };
+        let mut terminal = Terminal {
+            input,
+            output,
+            original,
+            screen_entered: false,
+        };
+        let setup_error = terminal
+            .enter_screen()
+            .expect_err("reject a non-writable screen");
+        assert!(
+            setup_error
+                .to_string()
+                .contains("could not enter reader screen")
+        );
+        assert!(
+            terminal.screen_entered,
+            "drop should attempt screen restoration"
+        );
+
+        let mut document = document(b"render error");
+        let reader = Reader::new(Settings::new());
+        let draw_error = terminal
+            .draw(
+                &mut document,
+                &reader,
+                Dimensions {
+                    rows: 2,
+                    columns: 20,
+                },
+            )
+            .expect_err("report a non-writable screen renderer");
+        assert!(
+            draw_error
+                .to_string()
+                .contains("could not render reader screen")
+        );
     }
 }
