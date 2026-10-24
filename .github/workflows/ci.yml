@@ -82,6 +82,9 @@ jobs:
     name: Line, branch, and end-to-end coverage
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/coverage-build
+      CARGO_LLVM_COV_TARGET_DIR: ${{ github.workspace }}/target/coverage-build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
