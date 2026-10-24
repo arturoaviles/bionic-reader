@@ -28,10 +28,14 @@ class BionicReader < Formula
 
   def install
     bin.install "bin/bionic-reader"
-    pkgshare.install Dir["share/bionic-reader/*"]
-    bash_completion.install "share/bionic-reader/completions/bionic-reader.bash" => "bionic-reader"
+    bash_completion.install(
+      "share/bionic-reader/completions/bionic-reader.bash" => "bionic-reader"
+    )
     zsh_completion.install "share/bionic-reader/completions/_bionic-reader"
-    fish_completion.install "share/bionic-reader/completions/bionic-reader.fish" => "bionic-reader.fish"
+    fish_completion.install(
+      "share/bionic-reader/completions/bionic-reader.fish" => "bionic-reader.fish"
+    )
+    pkgshare.install Dir["share/bionic-reader/*"]
     doc.install "README.md", "LICENSE"
   end
 

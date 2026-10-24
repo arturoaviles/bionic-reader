@@ -82,7 +82,7 @@ Before publishing a release, check crates.io name ownership and credentials, the
 cargo publish --dry-run --locked
 ```
 
-The dry run does not upload the crate. No workflow publishes it automatically. Source/Git installation works before registry publication; `cargo install bionic-reader --locked` requires an actual crates.io release. See the official [Cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html), [install](https://doc.rust-lang.org/cargo/commands/cargo-install.html), and [publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html) documentation.
+The dry run does not upload the crate. No workflow publishes it automatically. Use the README's source/Git installation commands before registry publication. See the official [Cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html), [install](https://doc.rust-lang.org/cargo/commands/cargo-install.html), and [publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html) documentation.
 
 ## Candidate binaries
 
@@ -126,10 +126,25 @@ scripts/build-snap-candidate.sh
 
 Homebrew rendering requires the four macOS and GNU Linux archives. Python wheel builds pin maturin 1.15.0; GNU wheels target manylinux 2.28 using Zig, and musl wheels target musllinux 1.2. Wheel installation smoke checks run only when the target exactly matches the build host. npm packages are split into a small launcher and six optional native platform packages. The wrapper passes arguments, stdio, environment, signals, and exit status through to the native executable; install scripts and native downloads are not used. The Snap candidate is classic-confined and marked `devel`; Store approval is an external prerequisite to a public Snap release.
 
-On a supported macOS or Linux host with a host-native build, `scripts/check-node-package-installs.sh target/debug/bionic-reader` creates local npm tarballs with the optional platform dependency rewritten to a `file:` candidate and installs them offline through npm, Yarn Plug'n'Play, and pnpm. It requires Node.js, npm, and Corepack 0.36.0; the lifecycle scripts remain disabled. Wheel builds exercise pip, `uv pip`, and `uv tool install` only when the wheel target exactly matches the host. These checks validate candidate installation from local files. Registry naming and availability, hosted repository TLS and key distribution, upgrade/uninstall paths, and external store approval remain release gates.
+On a supported macOS or Linux host with a host-native build, `scripts/check-node-package-installs.sh target/debug/bionic-reader` creates local npm tarballs with the optional platform dependency rewritten to a `file:` candidate and installs them offline through npm, Yarn Plug'n'Play, and pnpm. It requires Node.js, npm, and Corepack 0.36.0; the lifecycle scripts remain disabled. Wheel builds exercise pip, `uv pip`, and `uv tool install` only when the wheel target exactly matches the host. These checks validate candidate installation and removal using local files. Registry naming and availability, hosted repository TLS and key distribution, upgrade paths, and external store approval remain release gates.
 
 Run `scripts/check-frameworks.sh` to fetch the seven official framework revisions pinned in `integrations/adapters/frameworks.tsv` and exercise their real loaders. This network-dependent suite runs explicitly in CI; it is separate from the offline unit suite.
 
 ## Tool versions and references
 
 The wheel build pins [maturin 1.15.0](https://www.maturin.rs/), [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), Zig, and [nFPM](https://nfpm.goreleaser.com/); CI pins the exact version for each installed tool. The implementation follows the primary package-manager format documentation for [Homebrew formulae](https://docs.brew.sh/Formula-Cookbook), [APT signed repositories](https://wiki.debian.org/DebianRepository/UseThirdParty), [RPM repository metadata](https://rpm-software-management.github.io/createrepo_c/), [pacman repositories](https://wiki.archlinux.org/title/Pacman/Tips_and_tricks#Custom_local_repository), [Snap classic confinement](https://snapcraft.io/docs/reference/administration/reviewing-classic-confinement-snaps/), [Python binary wheels](https://www.maturin.rs/bindings.html), [npm platform packages](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#os), and [Yarn's local file protocol](https://yarnpkg.com/protocol/file).
+
+## Repository-only installation coverage
+
+The README documents a current-checkout route for every requested package manager. No Bionic Reader registry package or GitHub release is consumed by these tests.
+
+- Cargo checks both `--path` installation and Git-source installation from the checkout's exact commit (`scripts/check-cargo-git-install.sh`), plus extracted `.crate` installation.
+- `scripts/build-local-archive.sh` builds the exact host target and respects `CARGO_TARGET_DIR`. Its archives are for installation on the build host, while `build-release.sh` retains portable release constraints.
+- `scripts/check-homebrew-install.sh` consumes a host-local archive through a temporary local tap, checks formula installation, `brew test`, installed CLI/PTY behavior, uninstall, and tap cleanup. CI covers GNU/Linux and macOS on x86-64 and ARM64.
+- Linux container checks install from signed local repositories, remove the package, install the same built `.deb`/`.rpm`/Arch archive directly as shown in the README, check installed assets and CLI/PTY behavior, and remove it again.
+- `scripts/build-python-wheel.sh --local TARGET` builds a wheel for the exact host without Zig on GNU/Linux. It validates the wheel assets and tests pip, uv pip, and uv tool install/use/uninstall. CI exercises this route on matching macOS and GNU/Linux hosts in addition to the portable candidate builds.
+- `scripts/package-npm.sh --local` emits a base tarball and one native tarball from a host archive. Its only native dependency is a local file URL. The installation checker consumes these public artifacts, installs offline with npm/Yarn Plug'n'Play/pnpm, checks ANSI output and stdin, then removes the packages. CI covers Linux and macOS.
+- The Snap job runs on Ubuntu 24.04 with Snapcraft 8.14.5 (amd64 revision 17614). It builds the tracked checkout, installs the unsigned file using `--dangerous --classic`, checks the actual `/snap/bin/bionic-reader` launcher with CLI/PTY tests, then removes the Snap. Snapcraft itself runs elevated for its destructive build in this disposable runner; run the repository script as the normal runner user.
+- The seven pinned framework-loader tests start fresh interactive shells, require automatic activation of exactly one reading session, and check emphasized command output. In fish, initialization uses `eval (bionic-reader init fish | string collect)` so a sourced pipeline does not replace the terminal input needed by the session.
+
+To run the local routes, follow the commands in [README.md](README.md). Homebrew and Snap checks make actual package-manager installations and remove their own test installations; their helpers refuse to replace existing test formula/Snap installations.

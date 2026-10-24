@@ -274,8 +274,9 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
             pixel_height: 0,
         })
         .expect("create a pseudo-terminal for the framework session test");
-    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_bionic-reader"));
-    command.args(["session", "--shell", shell]);
+    // Start the user's shell itself: its framework adapter must activate the reading session.
+    let mut command = CommandBuilder::new(shell);
+    command.arg("-i");
     command.env("HOME", home);
     command.env("ZDOTDIR", home);
     command.env("XDG_CONFIG_HOME", home.join(".config"));
@@ -310,7 +311,7 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
     fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = init ]; then printf 'init\\n' >> \"$BIONIC_READER_INIT_LOG\"; fi\nexec {real_cli} \"$@\"\n"
+            "#!/bin/sh\ncase \"$1\" in init|session) printf '%s\\n' \"$1\" >> \"$BIONIC_READER_INIT_LOG\" ;; esac\nexec {real_cli} \"$@\"\n"
         ),
     )
     .expect("write framework test wrapper");
@@ -440,9 +441,15 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
         .expect("join framework pseudo-terminal reader");
     let init_count = fs::read_to_string(home.join("bionic-reader-init-count")).unwrap_or_default();
     assert_eq!(
-        init_count.lines().count(),
+        init_count.lines().filter(|line| *line == "init").count(),
+        2,
+        "{shell} must initialize once before activation and once inside its reading session: {}",
+        display(&output)
+    );
+    assert_eq!(
+        init_count.lines().filter(|line| *line == "session").count(),
         1,
-        "{shell} manager loaded zero or multiple adapter initializers: {}",
+        "{shell} must activate exactly one reading session: {}",
         display(&output)
     );
     assert!(

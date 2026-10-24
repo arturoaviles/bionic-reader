@@ -8,23 +8,28 @@ base: core24
 confinement: classic
 grade: devel
 
-architectures:
-  - build-on: [amd64]
-    build-for: [amd64]
-  - build-on: [arm64]
-    build-for: [arm64]
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: amd64
+  arm64:
+    build-on: [arm64]
+    build-for: arm64
 
 parts:
   bionic-reader:
     plugin: rust
     source: "@SOURCE_PATH@"
     source-type: local
-    rust-path: .
+    rust-path: ["."]
+    rust-channel: "1.85.1"
+    rust-inherit-ldflags: true
+    build-environment:
+      - LDFLAGS: >
+          -Wl,-rpath=\$ORIGIN/lib:/snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+          -Wl,-dynamic-linker=$(find /snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR -name 'ld*.so.*' -print | head -n1)
     override-build: |
-      cd "$CRAFT_PART_SRC"
-      rustup toolchain install 1.85.1 --profile minimal
-      cargo +1.85.1 build --locked --release --bin bionic-reader
-      install -Dm755 target/release/bionic-reader "$CRAFT_PART_INSTALL/bin/bionic-reader"
+      craftctl default
       install -Dm644 "$CRAFT_PART_SRC/LICENSE" "$CRAFT_PART_INSTALL/share/licenses/bionic-reader/LICENSE"
       install -Dm644 "$CRAFT_PART_SRC/README.md" "$CRAFT_PART_INSTALL/share/doc/bionic-reader/README.md"
       install -Dm644 "$CRAFT_PART_SRC/packaging/config.example.toml" "$CRAFT_PART_INSTALL/share/bionic-reader/config.example.toml"
@@ -36,3 +41,5 @@ parts:
 apps:
   bionic-reader:
     command: bin/bionic-reader
+    environment:
+      PATH: "$SNAP/bin:/snap/bin:$PATH"

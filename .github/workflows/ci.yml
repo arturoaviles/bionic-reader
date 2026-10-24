@@ -109,6 +109,90 @@ jobs:
           cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::chunk_boundaries_inside_utf8_and_sgr_do_not_change_output -- --exact
           cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::malformed_bytes_are_preserved_while_surrounding_words_transform -- --exact
 
+  homebrew-local:
+    name: Local Homebrew install (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Homebrew
+        if: runner.os == 'Linux'
+        run: |
+          if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+            curl --fail --silent --show-error --location \
+              https://raw.githubusercontent.com/Homebrew/install/85d1a3fc80d8a63932f632aca8f787de11d14a64/install.sh \
+              --output "$RUNNER_TEMP/install-homebrew.sh"
+            NONINTERACTIVE=1 bash "$RUNNER_TEMP/install-homebrew.sh"
+          fi
+          echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Build from this checkout and install through a local tap
+        run: |
+          scripts/build-local-archive.sh
+          scripts/check-homebrew-install.sh
+
+  snap-local:
+    name: Local Snap build, install, and use
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+      - name: Prepare snapd and the pinned Snapcraft builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes snapd
+          sudo systemctl enable --now snapd.socket
+          sudo snap wait system seed.loaded
+          sudo snap install snapcraft --classic --revision=17614
+          sudo snap install core24
+          echo /snap/bin >> "$GITHUB_PATH"
+          /snap/bin/snapcraft --version
+      - name: Build, install, use, and remove the unsigned local Snap
+        run: |
+          scripts/build-snap-candidate.sh "$RUNNER_TEMP/bionic-reader-snap"
+          scripts/check-snap-install.sh "$RUNNER_TEMP"/bionic-reader-snap/bionic-reader_*.snap
+
+  node-local-macos:
+    name: Local npm, Yarn, and pnpm installs (macOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - name: Install build tools
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          npm install --prefix "$RUNNER_TEMP/node-tools" --ignore-scripts --no-save --no-audit --no-fund --package-lock=false corepack@0.36.0
+          echo "$RUNNER_TEMP/node-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Build local archive and test local Node tarball installations
+        run: |
+          scripts/build-local-archive.sh
+          scripts/package-npm.sh --local
+          scripts/check-node-package-installs.sh target/aarch64-apple-darwin/release/bionic-reader
+
   framework-loader-tests:
     name: Pinned shell-framework loader tests
     runs-on: ubuntu-24.04
@@ -218,6 +302,14 @@ jobs:
           python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
       - name: Build target wheel and smoke-test matching hosts
         run: scripts/build-python-wheel.sh '${{ matrix.target }}' "$RUNNER_TEMP/python-wheels"
+      - name: Build and install the README's host-local Python wheel
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          if [[ $host == "$CANDIDATE_TARGET" ]]; then
+            scripts/build-python-wheel.sh --local "$host" "$RUNNER_TEMP/local-python-wheels"
+          fi
       - name: Upload workflow candidate artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -327,6 +419,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13.17'
@@ -352,5 +445,7 @@ jobs:
         run: |
           cargo uninstall --root "$RUNNER_TEMP/bionic-reader-install" bionic-reader
           test ! -e "$RUNNER_TEMP/bionic-reader-install/bin/bionic-reader"
+      - name: Install from the checkout's Git commit and use the installed tool
+        run: scripts/check-cargo-git-install.sh
       - name: Package, install, and use the Cargo crate
         run: scripts/check-cargo-package.sh

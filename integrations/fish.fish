@@ -1,4 +1,4 @@
-# bionic-reader generated fish integration. Evaluate with: bionic-reader init fish | source
+# bionic-reader generated fish integration. Evaluate with: eval (bionic-reader init fish | string collect)
 if test "$BIONIC_READER_DISABLE" != 1; and status is-interactive; and isatty stdin; and isatty stdout
     if test "$BIONIC_READER_SESSION" = 1; and set -q BIONIC_READER_MARKER_TOKEN
         if not set -q _BIONIC_READER_FISH_HOOKS

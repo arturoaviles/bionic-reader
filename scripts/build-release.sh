@@ -17,14 +17,15 @@ else
   )
 fi
 
-version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
+metadata_fields=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
 import json, sys
 metadata = json.load(sys.stdin)
 matches = [package for package in metadata["packages"] if package["name"] == "bionic-reader"]
 if len(matches) != 1:
     raise SystemExit("expected exactly one bionic-reader Cargo package")
-print(matches[0]["version"])
+print(matches[0]["version"] + "\t" + metadata["target_directory"])
 ')
+IFS=$'\t' read -r version target_directory <<< "$metadata_fields"
 source_epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}
 [[ $source_epoch =~ ^[0-9]+$ ]] || {
   printf 'SOURCE_DATE_EPOCH must be a non-negative integer\n' >&2
@@ -77,7 +78,7 @@ for target in "${targets[@]}"; do
         exit 69
       }
       cargo zigbuild --locked --release --bin bionic-reader --target "$target_base.2.28"
-      scripts/check-linux-glibc.sh "target/$target_base/release/bionic-reader" 2.28
+      scripts/check-linux-glibc.sh "$target_directory/$target_base/release/bionic-reader" 2.28
       ;;
     *-unknown-linux-musl)
       build=(cargo)
@@ -104,7 +105,7 @@ for target in "${targets[@]}"; do
       ;;
   esac
 
-  binary="target/$target_base/release/bionic-reader"
+  binary="$target_directory/$target_base/release/bionic-reader"
   [[ -x $binary ]] || {
     printf 'Expected build output was not created: %s\n' "$binary" >&2
     exit 1

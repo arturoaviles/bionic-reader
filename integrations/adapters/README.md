@@ -26,8 +26,9 @@ For Fisher, use `fisher remove /absolute/path/to/the/installed/plugin`. No
 original configuration needs to be reconstructed.
 
 `tests/frameworks.rs` exercises the seven managers' actual loaders in isolated
-PTY sessions, verifies the adapter initializes once, and checks native command
-output. `frameworks.tsv` pins the official upstream revisions. Run
+PTYs by starting fresh interactive shells. They verify automatic activation of
+exactly one reading session, initialization before activation and inside that
+session, and emphasized command output. `frameworks.tsv` pins the official upstream revisions. Run
 `scripts/check-frameworks.sh` to fetch those revisions into a temporary directory
 and run the tests. These network-dependent tests are separate from the offline
 unit suite and run explicitly in CI. They establish compatibility with the

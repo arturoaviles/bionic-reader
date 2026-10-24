@@ -30,15 +30,16 @@ command -v nfpm >/dev/null 2>&1 || {
   exit 69
 }
 
-version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
+metadata_fields=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
 import json, sys
 metadata = json.load(sys.stdin)
 matches = [package for package in metadata["packages"] if package["name"] == "bionic-reader"]
 if len(matches) != 1:
     raise SystemExit("expected exactly one bionic-reader Cargo package")
-print(matches[0]["version"])
+print(matches[0]["version"] + "\t" + metadata["target_directory"])
 ')
-binary="$repo_root/target/$target/release/bionic-reader"
+IFS=$'\t' read -r version target_directory <<< "$metadata_fields"
+binary="$target_directory/$target/release/bionic-reader"
 [[ -x $binary ]] || {
   printf 'Build the candidate binary first: %s\n' "$binary" >&2
   exit 66

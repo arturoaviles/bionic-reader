@@ -8,6 +8,7 @@ import errno
 import os
 import pty
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -371,7 +372,11 @@ def run_pty_check(binary: Path, root: Path, path: str) -> None:
     work = root / "session-work"
     for directory in (home, config_home, work):
         directory.mkdir()
-    (home / ".bashrc").write_text("PS1='BIONIC_SMOKE_READY> '\n", encoding="utf-8")
+    # Restore the exact tested command after package launchers such as Snap reset PATH.
+    (home / ".bashrc").write_text(
+        f"export PATH={shlex.quote(path)}\nPS1='BIONIC_SMOKE_READY> '\n",
+        encoding="utf-8",
+    )
     env = isolated_environment(home, config_home, path)
     env["SHELL"] = "/bin/bash"
 
@@ -451,7 +456,8 @@ def main() -> None:
         help="explicit path to the installed bionic-reader executable",
     )
     args = parser.parse_args()
-    binary = args.binary.expanduser().resolve()
+    # Snap uses a symlink to its multicall launcher; resolving it changes argv[0].
+    binary = args.binary.expanduser().absolute()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         fail(f"installed binary is missing or not executable: {binary}")
     if sys.platform not in ("darwin", "linux"):
@@ -466,7 +472,9 @@ def main() -> None:
         bin_dir = root / "bin"
         bin_dir.mkdir()
         (bin_dir / "bionic-reader").symlink_to(binary)
-        path = os.pathsep.join((str(bin_dir), os.defpath))
+        # Package-manager launchers may need Node/Corepack from the caller's PATH.
+        # Our explicit installed command stays first; HOME/XDG remain isolated.
+        path = os.pathsep.join((str(bin_dir), os.environ.get("PATH", os.defpath)))
         run_cli_checks(binary, root, path)
         run_pty_check(binary, root, path)
 

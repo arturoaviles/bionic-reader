@@ -4,12 +4,22 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
+local_build=false
+if [[ ${1:-} == --local ]]; then
+  local_build=true
+  shift
+fi
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  printf 'Usage: %s <target-triple> [output-directory]\n' "$0" >&2
+  printf 'Usage: %s [--local] <target-triple> [output-directory]\n' "$0" >&2
   exit 64
 fi
 
 target=$1
+host=$(rustc -vV | sed -n 's/^host: //p')
+if [[ $local_build == true && $target != "$host" ]]; then
+  printf 'Local wheels must match the compiler host (%s), got %s\n' "$host" "$target" >&2
+  exit 64
+fi
 version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
 import json, sys
 metadata = json.load(sys.stdin)
@@ -18,7 +28,11 @@ if len(matches) != 1:
     raise SystemExit("expected exactly one bionic-reader Cargo package")
 print(matches[0]["version"])
 ')
-output_dir=${2:-"$repo_root/dist/candidates/v$version/python"}
+if [[ $local_build == true ]]; then
+  output_dir=${2:-"$repo_root/dist/local/python"}
+else
+  output_dir=${2:-"$repo_root/dist/candidates/v$version/python"}
+fi
 mkdir -p "$output_dir"
 output_dir=$(cd "$output_dir" && pwd)
 
@@ -60,15 +74,19 @@ case "$target" in
     export MACOSX_DEPLOYMENT_TARGET=11.0
     ;;
   x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu)
-    command -v zig >/dev/null 2>&1 || {
-      printf 'GNU Linux wheels require Zig to target the manylinux_2_28 baseline\n' >&2
-      exit 69
-    }
-    [[ $(zig version) == '0.15.1' ]] || {
-      printf 'GNU Linux wheels are pinned to Zig 0.15.1; found %s\n' "$(zig version)" >&2
-      exit 69
-    }
-    build_args+=(--compatibility manylinux_2_28 --zig)
+    if [[ $local_build == true ]]; then
+      build_args+=(--compatibility linux)
+    else
+      command -v zig >/dev/null 2>&1 || {
+        printf 'GNU Linux wheels require Zig to target the manylinux_2_28 baseline\n' >&2
+        exit 69
+      }
+      [[ $(zig version) == '0.15.1' ]] || {
+        printf 'GNU Linux wheels are pinned to Zig 0.15.1; found %s\n' "$(zig version)" >&2
+        exit 69
+      }
+      build_args+=(--compatibility manylinux_2_28 --zig)
+    fi
     ;;
   x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
     build_args+=(--compatibility musllinux_1_2)
@@ -90,7 +108,6 @@ python3 "$repo_root/scripts/check-python-wheel.py" "$staged_wheel"
 wheel="$output_dir/$(basename "$staged_wheel")"
 cp "$staged_wheel" "$wheel"
 
-host=$(rustc -vV | sed -n 's/^host: //p')
 if [[ $host != "$target" ]]; then
   printf 'Built cross-target wheel %s; installation is checked only on an exact matching host (%s != %s)\n' \
     "$wheel" "$host" "$target"
@@ -114,6 +131,8 @@ verify_installed_binary() {
 python3 -m venv "$temporary/pip-env"
 "$temporary/pip-env/bin/python" -m pip install --no-index --no-deps --force-reinstall "$wheel"
 verify_installed_binary "$temporary/pip-env/bin/bionic-reader"
+"$temporary/pip-env/bin/python" -m pip uninstall --yes bionic-reader
+[[ ! -e $temporary/pip-env/bin/bionic-reader ]]
 
 export UV_TOOL_DIR="$temporary/uv-tools"
 export UV_TOOL_BIN_DIR="$temporary/uv-bin"
@@ -121,7 +140,11 @@ uv venv "$temporary/uv-env"
 uv pip install --no-index --no-deps --find-links "$output_dir" \
   --python "$temporary/uv-env/bin/python" "bionic-reader==$version"
 verify_installed_binary "$temporary/uv-env/bin/bionic-reader"
+uv pip uninstall --python "$temporary/uv-env/bin/python" bionic-reader
+[[ ! -e $temporary/uv-env/bin/bionic-reader ]]
 uv tool install --no-index --find-links "$output_dir" \
   --python "$(command -v python3)" "bionic-reader==$version"
 verify_installed_binary "$UV_TOOL_BIN_DIR/bionic-reader"
+uv tool uninstall bionic-reader
+[[ ! -e $UV_TOOL_BIN_DIR/bionic-reader ]]
 printf 'Created wheel candidate %s\n' "$wheel"
