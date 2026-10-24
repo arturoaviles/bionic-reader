@@ -294,6 +294,52 @@ fn markdown_keeps_destinations_and_code_unchanged() {
 }
 
 #[test]
+fn markdown_entity_and_escape_source_spelling_survives_emphasis_edits() {
+    let options = Settings {
+        input_format: InputFormat::Markdown,
+        format: OutputFormat::Markdown,
+        fraction: 1.0,
+        min_word_length: 2,
+        ..Settings::default()
+    };
+    let source = b"&eacute;clair &amp; \\*reading\\*";
+    let output = render(source, &options, true).expect("emphasize parsed Markdown text");
+    let output = String::from_utf8(output).expect("Markdown output remains UTF-8");
+    assert!(output.contains("&eacute;"), "{output}");
+    assert!(output.contains("&amp; \\***reading**\\*"), "{output}");
+    assert_eq!(
+        markdown_visible_text(output.as_bytes()),
+        markdown_visible_text(source)
+    );
+}
+
+#[test]
+fn markdown_html_can_emphasize_inline_and_fenced_code_when_enabled() {
+    let options = Settings {
+        input_format: InputFormat::Markdown,
+        format: OutputFormat::Html,
+        fraction: 1.0,
+        skip_code: false,
+        ..Settings::default()
+    };
+
+    let inline = render(b"`<reading>`", &options, true).expect("emphasize inline code");
+    assert_eq!(
+        inline,
+        b"<p><code>&lt;<strong>reading</strong>&gt;</code></p>\n"
+    );
+
+    let block = render(b"```text\nreading\n```", &options, true)
+        .expect("emphasize fenced code in escaped HTML");
+    let block = String::from_utf8(block).expect("HTML remains UTF-8");
+    assert!(
+        block.contains("<pre><code class=\"language-text\"><strong>reading</strong>"),
+        "{block}"
+    );
+    assert!(!block.contains("<script>"), "{block}");
+}
+
+#[test]
 fn markdown_plain_output_preserves_source_syntax_entities_and_escapes() {
     let source = b"&amp; \\*reading\\*";
     let plain = settings(InputFormat::Markdown, OutputFormat::Plain);
@@ -829,6 +875,76 @@ fn all_stream_renderers_preserve_read_write_and_flush_error_sources() {
             }
         }
     }
+}
+
+#[test]
+fn markup_conversions_reject_invalid_utf8_without_losing_error_context() {
+    for (input_format, format) in [
+        (InputFormat::Text, OutputFormat::Markdown),
+        (InputFormat::Text, OutputFormat::Html),
+        (InputFormat::Markdown, OutputFormat::Markdown),
+        (InputFormat::Markdown, OutputFormat::Html),
+    ] {
+        let options = settings(input_format, format);
+        let error = render(b"valid \xff invalid", &options, true)
+            .expect_err("markup conversion requires UTF-8");
+        assert!(
+            error.is_invalid_input(),
+            "{input_format:?} -> {format:?}: {error}"
+        );
+
+        let mut reader = ChunkedReader {
+            bytes: b"valid \xff invalid",
+            width: 1,
+        };
+        let mut output = Vec::new();
+        let error = render_stream(&mut reader, &mut output, &options, true)
+            .expect_err("streaming markup conversion also validates UTF-8");
+        assert!(
+            error.is_invalid_input(),
+            "{input_format:?} -> {format:?}: {error}"
+        );
+        if input_format == InputFormat::Markdown {
+            assert!(
+                output.is_empty(),
+                "Markdown input is spooled before rendering"
+            );
+        }
+    }
+}
+
+struct ReaderThenError {
+    bytes: &'static [u8],
+    offset: usize,
+}
+
+impl Read for ReaderThenError {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.offset < self.bytes.len() {
+            let count = buf.len().min(self.bytes.len() - self.offset);
+            buf[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+            self.offset += count;
+            return Ok(count);
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "fixture error after the first chunk",
+        ))
+    }
+}
+
+#[test]
+fn text_stream_keeps_already_written_output_when_a_later_read_fails() {
+    let options = settings(InputFormat::Text, OutputFormat::Plain);
+    let mut input = ReaderThenError {
+        bytes: b"already emitted",
+        offset: 0,
+    };
+    let mut output = Vec::new();
+    let error = render_stream(&mut input, &mut output, &options, false)
+        .expect_err("second read returns the injected error");
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+    assert_eq!(output, b"already emitted");
 }
 
 #[test]

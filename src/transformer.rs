@@ -514,6 +514,24 @@ impl Transformer {
                 continue;
             }
 
+            // When malformed UTF-8 lead bytes arrive in succession, discard
+            // the now-definitely-invalid prefix before rescanning it as part
+            // of an open word. This prefix is intentionally limited to three
+            // bytes: validation work stays constant even for long malformed
+            // runs, while an earlier word is handled by `process_available`.
+            if let Some(invalid_prefix_len) =
+                malformed_utf8_prefix_to_emit(&self.pending[..pending_before], appended)
+            {
+                output.extend_from_slice(&self.pending[..invalid_prefix_len]);
+                self.pending.drain(..invalid_prefix_len);
+                self.pending_c1_shielded =
+                    self.pending_c1_shielded.saturating_sub(invalid_prefix_len);
+                self.pending_word = false;
+                self.pending_control = None;
+                output.extend(self.process_available());
+                continue;
+            }
+
             if !self.pending_word
                 || appended.contains(&0x1b)
                 || !chunk_can_extend_word_after_pending(
@@ -1712,10 +1730,6 @@ fn chunk_can_extend_word(input: &[u8]) -> bool {
 }
 
 fn chunk_can_extend_word_after_pending(pending: &[u8], appended: &[u8], open_word: bool) -> bool {
-    if chunk_can_extend_word(appended) {
-        return true;
-    }
-
     if open_word {
         if let Some(start) = incomplete_utf8_suffix_start(pending) {
             let mut suffix = Vec::with_capacity(pending.len() - start + appended.len());
@@ -1724,26 +1738,66 @@ fn chunk_can_extend_word_after_pending(pending: &[u8], appended: &[u8], open_wor
             if chunk_can_extend_word(&suffix) || chunk_can_extend_with_grapheme_extension(&suffix) {
                 return true;
             }
-            // Keep an unresolved scalar or malformed suffix with the open
-            // word. Once it resolves to a complete delimiter, process it now.
-            if appended.iter().all(|byte| *byte >= 0x80) && str::from_utf8(&suffix).is_err() {
+            // Keep an unresolved scalar with the open word. A definitely
+            // malformed sequence is a delimiter and must be processed now.
+            if appended.iter().all(|byte| *byte >= 0x80) && is_incomplete_utf8(&suffix) {
                 return true;
             }
             return false;
         }
+    }
 
-        if appended.iter().all(|byte| *byte >= 0x80) {
-            if str::from_utf8(appended).is_err() {
-                // This may be a partial scalar or an invalid-byte run. Both
-                // need a following boundary before their relationship to the
-                // preceding word can be decided. The pending buffer is capped.
-                return true;
-            }
-            return chunk_can_extend_with_grapheme_extension(appended);
+    if chunk_can_extend_word(appended) {
+        return true;
+    }
+
+    if open_word && appended.iter().all(|byte| *byte >= 0x80) {
+        if is_incomplete_utf8(appended) {
+            // A partial scalar needs a following byte before its
+            // relationship to the preceding word can be decided.
+            return true;
         }
+        return chunk_can_extend_with_grapheme_extension(appended);
     }
 
     false
+}
+
+fn malformed_utf8_prefix_to_emit(pending: &[u8], appended: &[u8]) -> Option<usize> {
+    let suffix_start = incomplete_utf8_suffix_start(pending)?;
+    if suffix_start == 0 || suffix_start > 3 || appended.is_empty() {
+        return None;
+    }
+
+    let invalid_prefix = &pending[..suffix_start];
+    // Restrict this fast path to a tiny, wholly invalid, non-control prefix.
+    // This avoids both re-scanning growing malformed runs and interpreting a
+    // C1 byte or a valid scalar as ordinary text.
+    if invalid_prefix.iter().any(|byte| *byte < 0xa0) {
+        return None;
+    }
+    // Include the first byte of the incomplete suffix: that byte already
+    // proves the preceding prefix invalid (for example, `CC CC`).
+    let prefix_probe = &pending[..=suffix_start];
+    let error = str::from_utf8(prefix_probe).err()?;
+    if error.valid_up_to() != 0 || error.error_len().is_none() {
+        return None;
+    }
+
+    let suffix = &pending[suffix_start..];
+    let mut probe = [0; 4];
+    let probe_len = suffix.len().checked_add(1)?;
+    if probe_len > probe.len() {
+        return None;
+    }
+    probe[..suffix.len()].copy_from_slice(suffix);
+    probe[suffix.len()] = appended[0];
+    let error = str::from_utf8(&probe[..probe_len]).err()?;
+    (error.valid_up_to() == 0 && error.error_len().is_some()).then_some(suffix_start)
+}
+
+fn is_incomplete_utf8(input: &[u8]) -> bool {
+    str::from_utf8(input).is_err_and(|error| error.error_len().is_none())
 }
 
 fn incomplete_utf8_suffix_start(input: &[u8]) -> Option<usize> {
@@ -2012,7 +2066,23 @@ mod tests {
         actual.extend(renderer.finish());
         let scanned_bytes = super::TOKEN_SCAN_BYTES.with(std::cell::Cell::get);
 
-        assert_eq!(actual, expected);
+        if actual != expected {
+            let mismatch = actual
+                .iter()
+                .zip(&expected)
+                .position(|(actual, expected)| actual != expected)
+                .unwrap_or(actual.len().min(expected.len()));
+            let start = mismatch.saturating_sub(16);
+            let actual_end = (mismatch + 32).min(actual.len());
+            let expected_end = (mismatch + 32).min(expected.len());
+            panic!(
+                "stream output differs at byte {mismatch}: actual_len={}, expected_len={}, actual={:?}, expected={:?}",
+                actual.len(),
+                expected.len(),
+                &actual[start..actual_end],
+                &expected[start..expected_end]
+            );
+        }
         assert!(
             scanned_bytes <= input.len().saturating_mul(12).saturating_add(64),
             "token scanner revisited too much input: {scanned_bytes} bytes scanned for {} input bytes (slice reference scanned {expected_scan_bytes})",
@@ -3169,6 +3239,61 @@ mod tests {
 
         let combining = format!("a{} alpha beta gamma", "\u{301}".repeat(512));
         assert_bytewise_scan_work_is_linear(combining.as_bytes(), &settings);
+    }
+
+    #[test]
+    fn malformed_utf8_after_long_combining_runs_is_chunk_invariant_and_linear() {
+        let settings = Settings {
+            every: 7,
+            min_word_length: 1,
+            fraction: 1.0,
+            ..Settings::default()
+        };
+        let mut input = Vec::with_capacity(70_007);
+        input.extend_from_slice(b"\0a");
+        for _ in 0..1_327 {
+            input.extend_from_slice(b"\xcc\x81");
+        }
+        input.push(0xcc);
+        for _ in 0..22_210 {
+            input.extend_from_slice(b"\xcc\x81");
+        }
+        input.push(0xcc);
+        for _ in 0..11_462 {
+            input.extend_from_slice(b"\xcc\x81");
+        }
+        input.extend_from_slice(b" next");
+        assert_eq!(input.len(), 70_007);
+
+        assert_bytewise_scan_work_is_linear(&input, &settings);
+        let expected = super::transform(&input, &settings, true);
+        assert!(
+            expected.starts_with(b"\0\x1b[1ma"),
+            "the first word must be resolved before the malformed lead run"
+        );
+        for width in [2, 3, 7, 8192, input.len()] {
+            let mut renderer = Transformer::new(&settings, true);
+            let mut actual = Vec::new();
+            for chunk in input.chunks(width) {
+                actual.extend(renderer.push(chunk));
+            }
+            actual.extend(renderer.finish());
+            assert_eq!(actual, expected, "width={width}");
+        }
+    }
+
+    #[test]
+    fn repeated_malformed_utf8_leads_are_chunk_invariant_and_linear() {
+        let settings = Settings {
+            every: 7,
+            min_word_length: 1,
+            fraction: 1.0,
+            ..Settings::default()
+        };
+        let mut input = vec![b'a'];
+        input.extend(std::iter::repeat_n(0xcc, 32_768));
+
+        assert_bytewise_scan_work_is_linear(&input, &settings);
     }
 
     #[test]

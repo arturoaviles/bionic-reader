@@ -222,6 +222,8 @@ jobs:
               b'\0\xc2\x9b2;31mreading\xc2\x9b22m next\xc2\x9b0m',
               b'\0\x9d8;;https://example.test/\xc3\x9c\x9creading\x9d8;;\x9c',
               b'\0/\xd8\x94',
+              b'\0a' + b'\xcc\x81' * 1327 + b'\xcc' + b'\xcc\x81' * 22210 + b'\xcc' + b'\xcc\x81' * 11462 + b' next',
+              b'\0a' + b'\xcc' * 32768,
           ]
           for index, seed in enumerate(seeds):
               (corpus / f'seed-{index}').write_bytes(seed)

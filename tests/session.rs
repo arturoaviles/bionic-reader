@@ -5,11 +5,33 @@ use std::fs;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize};
+
+#[test]
+fn session_requires_terminal_input_and_output() {
+    let home = tempfile::tempdir().expect("create an isolated home for the session test");
+    let output = Command::new(env!("CARGO_BIN_EXE_bionic-reader"))
+        .args(["session", "--shell", "/bin/bash"])
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run session without a terminal");
+
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("reading sessions require a terminal on both stdin and stdout"),
+        "session should explain its terminal requirement: {error}"
+    );
+}
 
 // SAFETY JUSTIFICATION: These tests send POSIX signals to their live session process and inspect
 // the PTY's termios state. The standard library has no safe APIs for those checks; the calls use

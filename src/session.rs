@@ -1981,6 +1981,7 @@ mod tests {
             "on",
             "bypass-start:abcd",
             "bypass-end:abcd",
+            "bypass-end:deadbeef",
         ] {
             let (mut client, mut server) = UnixStream::pair().expect("create protocol socket pair");
             client.write_all(request.as_bytes()).expect("send request");
@@ -1992,6 +1993,7 @@ mod tests {
         assert!(state_guard.enabled);
         assert_eq!(state_guard.enabled_override, Some(true));
         assert!(state_guard.ended_bypass_tokens.contains("abcd"));
+        assert_eq!(state_guard.ended_bypass_tokens.len(), 1);
         drop(state_guard);
         for request in [
             b"unknown".as_slice(),
@@ -2341,5 +2343,88 @@ mod tests {
             .expect("worker must stop without a blocked request");
         let error = result.expect_err("corrupted state must reject the request");
         assert!(format!("{error:#}").contains("session control state is unavailable"));
+    }
+
+    #[test]
+    fn control_worker_serializes_concurrent_updates_and_reports_protocol_errors() {
+        use std::os::unix::net::UnixListener;
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct WorkerGuard {
+            stop: Arc<AtomicBool>,
+            worker: Option<thread::JoinHandle<()>>,
+        }
+
+        impl WorkerGuard {
+            fn stop_and_join(mut self) {
+                self.stop.store(true, Ordering::Relaxed);
+                self.worker
+                    .take()
+                    .expect("worker handle is present until shutdown")
+                    .join()
+                    .expect("control worker must stop after its clients finish");
+            }
+        }
+
+        impl Drop for WorkerGuard {
+            fn drop(&mut self) {
+                self.stop.store(true, Ordering::Relaxed);
+                if let Some(worker) = self.worker.take() {
+                    let _ = worker.join();
+                }
+            }
+        }
+
+        let directory = tempfile::tempdir().expect("create control worker directory");
+        let socket = directory.path().join("control.sock");
+        let listener = UnixListener::bind(&socket).expect("bind control worker socket");
+        listener
+            .set_nonblocking(true)
+            .expect("configure nonblocking control socket");
+        let state = enabled_runtime();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker = super::spawn_control_server(
+            listener,
+            Arc::clone(&state),
+            super::ReloadSource {
+                config_path: None,
+                overrides: crate::settings::Overrides::default(),
+            },
+            Arc::clone(&stop),
+        )
+        .expect("spawn control worker");
+        let worker = WorkerGuard {
+            stop: Arc::clone(&stop),
+            worker: Some(worker),
+        };
+
+        let barrier = Arc::new(Barrier::new(8));
+        let clients = (0..8)
+            .map(|_| {
+                let socket = socket.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    super::send_control_request(&socket, "on")
+                })
+            })
+            .collect::<Vec<_>>();
+        for client in clients {
+            client
+                .join()
+                .expect("control client must finish")
+                .expect("concurrent idempotent control updates must succeed");
+        }
+
+        let error = super::send_control_request(&socket, "unknown")
+            .expect_err("the worker must reject an unsupported protocol command");
+        assert!(format!("{error:#}").contains("invalid session control request"));
+        let state = state.lock().expect("inspect the shared session state");
+        assert!(state.enabled);
+        assert_eq!(state.enabled_override, Some(true));
+        drop(state);
+
+        worker.stop_and_join();
     }
 }

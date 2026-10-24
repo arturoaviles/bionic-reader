@@ -19,7 +19,10 @@ fuzz_target!(|input: &[u8]| {
         },
         ..Settings::default()
     };
-    assert_eq!(transformer::transform(input, &settings, false), input);
+    assert!(
+        transformer::transform(input, &settings, false) == input,
+        "disabled transformation changed the input bytes"
+    );
     let expected = transformer::transform(input, &settings, true);
     let width = input
         .first()
@@ -30,7 +33,11 @@ fuzz_target!(|input: &[u8]| {
         output.extend(transformer.push(chunk));
     }
     output.extend(transformer.finish());
-    assert_eq!(output, expected);
+    assert!(
+        output == expected,
+        "chunked transformation differs ({} input bytes, chunk width {width})",
+        input.len()
+    );
 
     let mut filter = ControlFilter::new(ControlPolicy::Safe);
     let mut whole = filter.push(input);
@@ -41,7 +48,11 @@ fuzz_target!(|input: &[u8]| {
         chunked.extend(filter.push(chunk));
     }
     chunked.extend(filter.finish());
-    assert_eq!(chunked, whole);
+    assert!(
+        chunked == whole,
+        "chunked control filtering differs ({} input bytes, chunk width {width})",
+        input.len()
+    );
 
     if std::str::from_utf8(input).is_ok() {
         for format in [

@@ -150,7 +150,9 @@ impl ZshCompletionTerminal {
             })
             .expect("open a pseudo-terminal for Zsh completion");
         let mut command = CommandBuilder::new("zsh");
-        command.arg("-i");
+        // Exercise our completion in the isolated startup file. Ubuntu's global
+        // zshrc can run compinit (and prompt) before that file is read.
+        command.args(["-d", "-i"]);
         command.env("HOME", home);
         command.env("ZDOTDIR", home);
         command.env("BR_COMPLETION_RESULT", report);
