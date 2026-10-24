@@ -52,3 +52,15 @@ pub(crate) fn normalize_shell(shell: &str) -> Result<&'static str, Error> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unsupported_shell_names_and_paths_are_rejected() {
+        for shell in ["", "/bin/", "sh", "/bin/powershell"] {
+            let error = super::init(shell).expect_err("unsupported shell must fail");
+            assert!(error.is_invalid_input());
+            assert!(error.to_string().contains("expected bash, zsh, or fish"));
+        }
+    }
+}

@@ -50,7 +50,7 @@ complete_for bionic-reader completions f
     );
     assert_eq!(
         String::from_utf8(completed.stdout).expect("Bash completion output should be valid UTF-8"),
-        "--shell\n--style\n---\nauto\nalways\n---\nfish\n"
+        "--shell\n--style\n--skip-code\n---\nauto\nalways\n---\nfish\n"
     );
 }
 

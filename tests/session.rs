@@ -525,14 +525,10 @@ fn run_session_inner(
     command.env("XDG_CONFIG_HOME", home.join(".config"));
     command.env("XDG_DATA_HOME", home.join(".local/share"));
     command.env("XDG_CACHE_HOME", home.join(".cache"));
-    command.env(
-        "TERM",
-        if path_prefix.is_some() {
-            "dumb"
-        } else {
-            "xterm-256color"
-        },
-    );
+    command.env("TERM", "xterm-256color");
+    command.env_remove("NO_COLOR");
+    // This PTY harness has no terminal emulator to answer fish capability probes.
+    command.env("fish_features", "no-query-term");
     command.env_remove("BIONIC_READER_DISABLE");
     command.env_remove("BIONIC_READER_SESSION");
     command.env_remove("BIONIC_READER_CONTROL_SOCKET");

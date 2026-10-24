@@ -7,8 +7,12 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use bionic_reader::Error;
-use bionic_reader::settings::{Overrides, Settings, Style};
+use bionic_reader::settings::{
+    ControlPolicy, Emphasis, InputFormat, LengthRule, OutputFormat, Overrides, Profile, Settings,
+    Style,
+};
 use bionic_reader::transformer::Transformer;
+use bionic_reader::{document, reader};
 use bionic_reader::{session, shell};
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
@@ -40,12 +44,50 @@ struct Cli {
     /// Add a command name to the interactive passthrough exclusions.
     #[arg(long, global = true)]
     exclude: Vec<String>,
+    /// Named fixation preference; explicit numeric flags override its values.
+    #[arg(long, global = true, value_enum)]
+    profile: Option<Profile>,
+    /// Per-length fraction in MAX:FRACTION form; repeat in increasing MAX order.
+    #[arg(long = "length-rule", global = true, value_parser = parse_length_rule)]
+    length_rules: Vec<LengthRule>,
+    /// Emphasis attribute: bold, underline, or reverse video.
+    #[arg(long, global = true, value_enum)]
+    emphasis: Option<Emphasis>,
+    /// Interpret ordinary text, Markdown source, or trusted terminal output.
+    #[arg(long, global = true, value_enum)]
+    input_format: Option<InputFormat>,
+    /// Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML.
+    #[arg(long, global = true, value_enum)]
+    format: Option<OutputFormat>,
+    /// Remove active document controls, or preserve trusted terminal controls.
+    #[arg(long, global = true, value_enum)]
+    controls: Option<ControlPolicy>,
+    /// Protect Markdown code from emphasis (default true); use --skip-code=false to include it.
+    #[arg(long, global = true, num_args = 0..=1, default_missing_value = "true")]
+    skip_code: Option<bool>,
+    /// Flush stalled partial words unchanged after 50 ms; disables content-only determinism.
+    #[arg(long, global = true, num_args = 0..=1, default_missing_value = "true")]
+    low_latency: Option<bool>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Read a document with scrolling, search, and adjustable fixation settings.
+    Read {
+        /// File to read; omit it or use - to consume piped stdin.
+        file: Option<PathBuf>,
+    },
+    /// Preview fixation settings on a sample passage or supplied text.
+    Preview {
+        /// Passage for the interactive preview.
+        #[arg(long)]
+        text: Option<String>,
+        /// Print the preview instead of opening the interactive reader.
+        #[arg(long)]
+        print: bool,
+    },
     /// Start an interactive reading session.
     Session {
         /// Bash, Zsh, or fish executable (defaults to SHELL).
@@ -178,12 +220,30 @@ fn run() -> Result<i32, Failure> {
         min_word_length: cli.min_word_length,
         style: cli.style,
         exclude_commands: (!cli.exclude.is_empty()).then_some(cli.exclude),
+        profile: cli.profile,
+        length_rules: (!cli.length_rules.is_empty()).then_some(cli.length_rules),
+        emphasis: cli.emphasis,
+        input_format: cli.input_format,
+        format: cli.format,
+        controls: cli.controls,
+        skip_code: cli.skip_code,
+        low_latency: cli.low_latency,
     };
     let settings = Settings::load(cli.config.as_deref(), &overrides)
         .map_err(|error| Failure::Usage(error.to_string()))?;
-    if let Some(Commands::Session { shell }) = cli.command {
-        return session::run(shell.as_deref(), settings, cli.config, overrides)
-            .map_err(Failure::Runtime);
+    match cli.command {
+        Some(Commands::Session { shell }) => {
+            if settings.format != OutputFormat::Ansi {
+                return Err(Failure::Usage(
+                    "reading sessions require --format ansi".into(),
+                ));
+            }
+            return session::run(shell.as_deref(), settings, cli.config, overrides)
+                .map_err(Failure::Runtime);
+        }
+        Some(Commands::Read { file }) => return read_document(file, settings),
+        Some(Commands::Preview { text, print }) => return preview(text, print, settings),
+        _ => {}
     }
     if cli.text.is_none() && io::stdin().is_terminal() {
         use clap::CommandFactory;
@@ -191,24 +251,82 @@ fn run() -> Result<i32, Failure> {
         println!();
         return Ok(0);
     }
-    let enabled = match settings.style {
-        Style::Auto => io::stdout().is_terminal(),
-        Style::Always => true,
-        Style::Never => false,
+    filter(cli.text, &settings)
+}
+
+fn read_document(file: Option<PathBuf>, settings: Settings) -> Result<i32, Failure> {
+    use std::io::IsTerminal;
+    let mut input: Box<dyn Read> = match file {
+        Some(path) if path.as_os_str() != "-" => Box::new(std::fs::File::open(path)?),
+        _ => {
+            if io::stdin().is_terminal() {
+                return Err(Failure::Usage(
+                    "supply a file or pipe document text into read".into(),
+                ));
+            }
+            Box::new(io::stdin())
+        }
     };
-    let mut renderer = Transformer::new(&settings, enabled);
-    let mut output = io::stdout().lock();
-    if let Some(text) = cli.text {
-        output.write_all(&renderer.push(text.as_bytes()))?;
-        output.write_all(&renderer.finish())?;
+    reader::run(&mut input, settings).map_err(Failure::Runtime)?;
+    Ok(0)
+}
+
+fn preview(text: Option<String>, print: bool, settings: Settings) -> Result<i32, Failure> {
+    use std::io::IsTerminal;
+    let passage = text.unwrap_or_else(||
+        "Reading complex documentation becomes easier with customizable visual emphasis.\nCafé, niño, 日本語, 你好世界, مرحبا, Привет.\n".into());
+    if print {
+        let enabled = if settings.format == OutputFormat::Ansi {
+            settings.style.enabled(io::stdout().is_terminal())
+        } else {
+            settings.style != Style::Never
+        };
+        io::stdout().lock().write_all(
+            &document::render(passage.as_bytes(), &settings, enabled).map_err(Failure::Runtime)?,
+        )?;
     } else {
-        stream_filter(&mut renderer, &mut output)?;
+        reader::run(&mut passage.as_bytes(), settings).map_err(Failure::Runtime)?;
+    }
+    Ok(0)
+}
+
+fn filter(text: Option<String>, settings: &Settings) -> Result<i32, Failure> {
+    use std::io::IsTerminal;
+    let enabled = if settings.format == OutputFormat::Ansi {
+        settings.style.enabled(io::stdout().is_terminal())
+    } else {
+        settings.style != Style::Never
+    };
+    let mut output = io::stdout().lock();
+    if let Some(text) = text {
+        output.write_all(
+            &document::render(text.as_bytes(), settings, enabled).map_err(Failure::Runtime)?,
+        )?;
+    } else if settings.low_latency
+        && settings.format == OutputFormat::Ansi
+        && settings.input_format != InputFormat::Markdown
+    {
+        let mut renderer = Transformer::new(settings, enabled);
+        let policy = if settings.input_format == InputFormat::Terminal {
+            ControlPolicy::Preserve
+        } else {
+            settings.controls
+        };
+        stream_filter(&mut renderer, &mut output, policy)?;
+    } else {
+        document::render_stream(&mut io::stdin().lock(), &mut output, settings, enabled)
+            .map_err(Failure::Runtime)?;
     }
     output.flush()?;
     Ok(0)
 }
 
-fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Result<()> {
+fn stream_filter(
+    renderer: &mut Transformer,
+    output: &mut impl Write,
+    policy: ControlPolicy,
+) -> io::Result<()> {
+    let mut controls = document::ControlFilter::new(policy);
     let mut input = io::stdin().lock();
     let mut buffer = [0_u8; 8192];
     let mut flush_timer = PendingFlushTimer::default();
@@ -222,11 +340,12 @@ fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Res
         if ready {
             match input.read(&mut buffer) {
                 Ok(0) => {
+                    output.write_all(&renderer.push(&controls.finish()))?;
                     output.write_all(&renderer.finish())?;
                     return Ok(());
                 }
                 Ok(count) => {
-                    let bytes = renderer.push(&buffer[..count]);
+                    let bytes = renderer.push(&controls.push(&buffer[..count]));
                     flush_timer.observe_input(
                         renderer.has_pending(),
                         !bytes.is_empty(),
@@ -248,6 +367,20 @@ fn stream_filter(renderer: &mut Transformer, output: &mut impl Write) -> io::Res
             flush_timer.after_flush(renderer.has_pending(), Instant::now());
         }
     }
+}
+
+fn parse_length_rule(value: &str) -> Result<LengthRule, String> {
+    let (maximum, fraction) = value
+        .split_once(':')
+        .ok_or_else(|| "expected MAX:FRACTION, for example 4:0.25".to_owned())?;
+    Ok(LengthRule {
+        max_length: maximum
+            .parse()
+            .map_err(|error| format!("MAX must be a positive integer: {error}"))?,
+        fraction: fraction
+            .parse()
+            .map_err(|error| format!("FRACTION must be a number from zero through one: {error}"))?,
+    })
 }
 
 fn stdin_ready(timeout_ms: i32) -> io::Result<bool> {

@@ -38,7 +38,7 @@ use signal_hook::consts::signal;
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
 use crate::Error;
-use crate::settings::{Overrides, Settings, Style};
+use crate::settings::{Overrides, Settings};
 use crate::shell;
 use crate::transformer::{self, Transformer};
 
@@ -112,7 +112,7 @@ pub fn run(
         )
     })?;
 
-    let initial_enabled = settings.style != Style::Never;
+    let initial_enabled = settings.style.enabled(true);
     let runtime = Arc::new(Mutex::new(RuntimeState {
         settings,
         enabled: initial_enabled,
@@ -771,7 +771,7 @@ fn handle_control_request(
     if let Some(refreshed) = refreshed {
         state.settings = refreshed;
         if state.enabled_override.is_none() {
-            state.enabled = state.settings.style != Style::Never;
+            state.enabled = state.settings.style.enabled(true);
         }
         return Ok(());
     }
@@ -1203,7 +1203,9 @@ impl MarkerParser {
             }
             let Some(end) = find_subslice(&self.pending[2..], b"\x1b\\") else {
                 if self.pending.len() > MARKER_LIMIT {
-                    let bytes = mem::take(&mut self.pending);
+                    let keep = usize::from(self.pending.last() == Some(&0x1b));
+                    let count = self.pending.len() - keep;
+                    let bytes = self.pending.drain(..count).collect();
                     events.push(ParsedEvent::Marker(Marker::UnsafeDcs(bytes)));
                     self.discard_dcs = true;
                 }
@@ -1853,5 +1855,316 @@ mod tests {
             .sync_bypass(&mut output)
             .expect_err("bypass updates must also reject potentially inconsistent runtime state");
         assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
+    #[test]
+    fn session_metadata_rejects_malformed_commands_and_recognizes_wrapped_exclusions() {
+        let settings = Settings::default();
+        for command in [
+            b"".as_slice(),
+            b"'unterminated",
+            b"reading | less",
+            b"reading && vim",
+            b"\xff",
+            b"bad\x1bcommand",
+            b"env -i TERM=xterm /bin/vim",
+            b"sudo -u root -- /bin/less",
+            b"sudo -g staff -h host -p prompt /bin/vim",
+            b"command builtin exec nohup time vim",
+            b"env -i",
+            b"sudo --",
+            b"bionic-reader read file",
+        ] {
+            assert!(
+                super::command_is_excluded(command, &settings),
+                "{command:?}"
+            );
+        }
+        assert!(!super::command_is_excluded(
+            b"env -i A=B printf reading",
+            &settings
+        ));
+        assert!(!super::command_is_excluded(
+            b"sudo -- printf reading",
+            &settings
+        ));
+        assert!(super::command_is_excluded(
+            &vec![b'x'; super::MARKER_LIMIT + 1],
+            &settings
+        ));
+    }
+
+    #[test]
+    fn shell_metadata_ansi_c_quoting_decodes_only_its_finite_data_alphabet() {
+        for (escaped, expected) in [
+            ("a", '\x07'),
+            ("b", '\x08'),
+            ("e", '\x1b'),
+            ("E", '\x1b'),
+            ("f", '\x0c'),
+            ("n", '\n'),
+            ("r", '\r'),
+            ("t", '\t'),
+            ("v", '\x0b'),
+        ] {
+            assert_eq!(
+                super::decode_ansi_c_quote(&format!("$'\\{escaped}'")),
+                Some(expected.to_string())
+            );
+        }
+        assert_eq!(
+            super::decode_ansi_c_quote(r"$'\101\12'"),
+            Some("A\n".to_owned())
+        );
+        for text in [r"$'\q'", r"$'\777'", r"$'\377'", "plain"] {
+            assert_eq!(super::decode_ansi_c_quote(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn exit_status_mapping_preserves_shell_and_signal_conventions() {
+        use std::os::unix::process::ExitStatusExt;
+        for (name, signal) in [
+            ("Hangup", 1),
+            ("Interrupt", 2),
+            ("Quit", 3),
+            ("Terminated", 15),
+        ] {
+            assert_eq!(
+                super::pty_exit_code(&portable_pty::ExitStatus::with_signal(name)),
+                128 + signal
+            );
+            assert_eq!(super::signal_exit_code(signal), 128 + signal);
+            assert_eq!(
+                super::process_exit_code(std::process::ExitStatus::from_raw(signal)),
+                128 + signal
+            );
+        }
+        assert_eq!(super::signal_exit_code(12), 140);
+        assert_eq!(
+            super::pty_exit_code(&portable_pty::ExitStatus::with_signal("Unknown")),
+            1
+        );
+        assert_eq!(
+            super::pty_exit_code(&portable_pty::ExitStatus::with_exit_code(u32::MAX)),
+            1
+        );
+        assert_eq!(
+            super::process_exit_code(std::process::ExitStatus::from_raw(7 << 8)),
+            7
+        );
+        assert!(
+            super::complete_bypass(Ok(0), Err(crate::Error::new("cleanup".to_owned())))
+                .expect_err("cleanup failure propagates")
+                .to_string()
+                .contains("cleanup")
+        );
+    }
+    #[test]
+    fn control_protocol_updates_state_and_rejects_invalid_utf8_requests_and_tokens() {
+        use std::io::Write;
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixStream;
+        let state = Mutex::new(RuntimeState {
+            settings: Settings::new(),
+            enabled: true,
+            enabled_override: None,
+            bypass_tokens: HashSet::new(),
+            ended_bypass_tokens: HashSet::new(),
+        });
+        let source = super::ReloadSource {
+            config_path: None,
+            overrides: crate::settings::Overrides::new(),
+        };
+        for request in [
+            "off",
+            "toggle",
+            "on",
+            "bypass-start:abcd",
+            "bypass-end:abcd",
+        ] {
+            let (mut client, mut server) = UnixStream::pair().expect("create protocol socket pair");
+            client.write_all(request.as_bytes()).expect("send request");
+            client.shutdown(Shutdown::Write).expect("finish request");
+            super::handle_control_request(&mut server, &state, &source)
+                .expect("apply protocol operation");
+        }
+        let state_guard = state.lock().expect("inspect control state");
+        assert!(state_guard.enabled);
+        assert_eq!(state_guard.enabled_override, Some(true));
+        assert!(state_guard.ended_bypass_tokens.contains("abcd"));
+        drop(state_guard);
+        for request in [
+            b"unknown".as_slice(),
+            b"bypass-start:!",
+            b"bypass-end:",
+            b"\xff",
+        ] {
+            let (mut client, mut server) =
+                UnixStream::pair().expect("create invalid-request socket pair");
+            client.write_all(request).expect("send invalid request");
+            client
+                .shutdown(Shutdown::Write)
+                .expect("finish invalid request");
+            assert!(
+                super::handle_control_request(&mut server, &state, &source).is_err(),
+                "{request:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsafe_terminal_guard_distinguishes_unicode_from_active_sequences() {
+        for source in ["ࠀ", "퟿", "𐀀", "😀", "\u{10ffff}"] {
+            assert!(!super::has_unsafe_control(
+                source.as_bytes(),
+                &mut super::Utf8Boundary::default()
+            ));
+        }
+        for source in [
+            b"\x1b[2J".as_slice(),
+            b"\x1b[",
+            b"\x1b]52;c;x\x07",
+            b"\x1b]0;title",
+            b"\x1bPunsafe\x1b\\",
+            b"\x9b",
+        ] {
+            assert!(
+                super::has_unsafe_control(source, &mut super::Utf8Boundary::default()),
+                "{source:?}"
+            );
+        }
+        for source in [
+            b"\x1b]0;title\x07".as_slice(),
+            b"\x1b]8;;https://example.test\x1b\\",
+            b"\x1b(B",
+            b"\x1b[?2004h",
+        ] {
+            assert!(
+                !super::has_unsafe_control(source, &mut super::Utf8Boundary::default()),
+                "{source:?}"
+            );
+        }
+    }
+    #[test]
+    fn oversized_and_stalled_markers_recover_after_a_split_terminator() {
+        let mut parser = super::MarkerParser::new("secret");
+        let mut oversized = b"\x1bP".to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', super::MARKER_LIMIT));
+        oversized.push(0x1b);
+        let events = parser.push(&oversized);
+        assert!(matches!(
+            events.first(),
+            Some(ParsedEvent::Marker(Marker::UnsafeDcs(_)))
+        ));
+        let events = parser.push(b"\\\x1bP+BIONIC_READER;secret;BEGIN\x1b\\");
+        assert!(events.iter().any(
+            |event| matches!(event, ParsedEvent::Marker(Marker::Begin(bytes)) if bytes.is_empty())
+        ));
+        assert!(parser.finish().is_empty());
+        assert!(parser.push(b"\x1bPstalled").is_empty());
+        parser.pending_since = Some(
+            std::time::Instant::now()
+                .checked_sub(super::PENDING_FLUSH)
+                .expect("clock supports the test timeout"),
+        );
+        assert!(matches!(
+            parser.flush_pending().first(),
+            Some(ParsedEvent::Marker(Marker::UnsafeDcs(_)))
+        ));
+        assert!(!parser.push(b"data\x1b").is_empty());
+        let events = parser.push(b"\\\x1bP+BIONIC_READER;secret;END:\x1b\\");
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ParsedEvent::Marker(Marker::End)))
+        );
+        for payload in [
+            b"+BIONIC_READER;secret;BYPASS+!".as_slice(),
+            b"+BIONIC_READER;secret;BYPASS-",
+            b"+BIONIC_READER;secret;OTHER",
+        ] {
+            assert!(parser.parse_marker(payload).is_none());
+        }
+        assert!(parser.push(b"\x1bPunfinished").is_empty());
+        assert!(matches!(
+            parser.finish().first(),
+            Some(ParsedEvent::Marker(Marker::UnsafeDcs(_)))
+        ));
+    }
+
+    #[test]
+    fn operating_system_helpers_return_typed_errors_for_invalid_descriptors() {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        assert!(super::TerminalMode::try_new(-1).is_err());
+        super::read_descriptor(-1, &mut [0]).expect_err("invalid descriptor must fail");
+        let (reader, mut writer) =
+            std::os::unix::net::UnixStream::pair().expect("create descriptor pair");
+        assert!(!super::wait_for_descriptor(reader.as_raw_fd(), 0).expect("poll idle descriptor"));
+        writer.write_all(b"x").expect("make descriptor readable");
+        assert!(
+            super::wait_for_descriptor(reader.as_raw_fd(), 0).expect("poll readable descriptor")
+        );
+        let mut byte = [0];
+        assert_eq!(
+            super::read_descriptor(reader.as_raw_fd(), &mut byte).expect("read descriptor"),
+            1
+        );
+        assert_eq!(byte, [b'x']);
+        super::signal_process(0, 0);
+        reader
+            .shutdown(std::net::Shutdown::Read)
+            .expect("close reader");
+    }
+
+    #[test]
+    fn control_client_handles_rejection_malformed_responses_and_missing_sockets() {
+        use std::io::{Read, Write};
+        use std::net::Shutdown;
+        let directory = tempfile::tempdir().expect("create control socket directory");
+        let missing = directory.path().join("missing");
+        assert_eq!(
+            super::send_control_request(&missing, "on")
+                .expect_err("socket is absent")
+                .io_kind(),
+            Some(io::ErrorKind::NotFound)
+        );
+        for (index, response) in [
+            b"ok\n".as_slice(),
+            b"error:fixture rejection\n",
+            b"unexpected",
+            b"\xff",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let socket = directory.path().join(format!("control-{index}"));
+            let listener =
+                std::os::unix::net::UnixListener::bind(&socket).expect("bind response fixture");
+            let server = thread::spawn(move || {
+                let (mut connection, _) = listener.accept().expect("accept control client");
+                let mut request = String::new();
+                connection
+                    .read_to_string(&mut request)
+                    .expect("read request");
+                assert_eq!(request, "on");
+                connection
+                    .write_all(response)
+                    .expect("write fixture response");
+                connection
+                    .shutdown(Shutdown::Write)
+                    .expect("finish fixture response");
+            });
+            let result = super::send_control_request(&socket, "on");
+            if index == 0 {
+                result.expect("accept success response");
+            } else {
+                let error = result.expect_err("reject invalid response");
+                if index == 1 {
+                    assert_eq!(error.to_string(), "fixture rejection");
+                }
+            }
+            server.join().expect("join response fixture");
+        }
     }
 }

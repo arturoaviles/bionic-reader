@@ -170,7 +170,7 @@ fn explicit_text_uses_default_prefix_emphasis() {
 #[test]
 fn redirected_auto_output_preserves_input_bytes_and_formatting() {
     let input = b"\x1b[31mreading\x1b[0m\n\xff\0";
-    let output = invoke(&[], input);
+    let output = invoke(&["--controls", "preserve"], input);
     assert!(
         output.status.success(),
         "CLI failed to preserve redirected input: {}",
@@ -364,10 +364,10 @@ fn session_controls_outside_a_reading_session_fail_clearly() {
 }
 
 #[test]
-fn stalled_partial_word_is_flushed_and_its_remainder_stays_plain() {
+fn low_latency_flushes_stalled_partial_words_and_keeps_their_remainder_plain() {
     let home = tempfile::tempdir().expect("create temporary home for stalled word test");
     let mut child = command(home.path())
-        .args(["--style", "always"])
+        .args(["--style", "always", "--low-latency"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

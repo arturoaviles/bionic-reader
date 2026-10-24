@@ -34,6 +34,12 @@ _bionic__reader() {
             bionic__reader,on)
                 cmd="bionic__reader__subcmd__on"
                 ;;
+            bionic__reader,preview)
+                cmd="bionic__reader__subcmd__preview"
+                ;;
+            bionic__reader,read)
+                cmd="bionic__reader__subcmd__read"
+                ;;
             bionic__reader,reload)
                 cmd="bionic__reader__subcmd__reload"
                 ;;
@@ -61,6 +67,12 @@ _bionic__reader() {
             bionic__reader__subcmd__help,on)
                 cmd="bionic__reader__subcmd__help__subcmd__on"
                 ;;
+            bionic__reader__subcmd__help,preview)
+                cmd="bionic__reader__subcmd__help__subcmd__preview"
+                ;;
+            bionic__reader__subcmd__help,read)
+                cmd="bionic__reader__subcmd__help__subcmd__read"
+                ;;
             bionic__reader__subcmd__help,reload)
                 cmd="bionic__reader__subcmd__help__subcmd__reload"
                 ;;
@@ -77,7 +89,7 @@ _bionic__reader() {
 
     case "${cmd}" in
         bionic__reader)
-            opts="-t -h -V --text --fraction --every --min-word-length --style --config --exclude --help --version session init completions on off toggle reload bypass help"
+            opts="-t -h -V --text --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help --version read preview session init completions on off toggle reload bypass help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -115,6 +127,38 @@ _bionic__reader() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -123,7 +167,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__bypass)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -151,6 +195,38 @@ _bionic__reader() {
                     ;;
                 --exclude)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -161,7 +237,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__completions)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help bash zsh fish"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help bash zsh fish"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -191,6 +267,38 @@ _bionic__reader() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -199,7 +307,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__help)
-            opts="session init completions on off toggle reload bypass help"
+            opts="read preview session init completions on off toggle reload bypass help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -296,6 +404,34 @@ _bionic__reader() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        bionic__reader__subcmd__help__subcmd__preview)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bionic__reader__subcmd__help__subcmd__read)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         bionic__reader__subcmd__help__subcmd__reload)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -339,7 +475,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__init)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help bash zsh fish"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help bash zsh fish"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -367,6 +503,38 @@ _bionic__reader() {
                     ;;
                 --exclude)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -377,7 +545,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__off)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -405,6 +573,38 @@ _bionic__reader() {
                     ;;
                 --exclude)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -415,7 +615,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__on)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -443,6 +643,182 @@ _bionic__reader() {
                     ;;
                 --exclude)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bionic__reader__subcmd__preview)
+            opts="-h --text --print --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --text)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --fraction)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --every)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --min-word-length)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --style)
+                    COMPREPLY=($(compgen -W "auto always never" -- "${cur}"))
+                    return 0
+                    ;;
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --exclude)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bionic__reader__subcmd__read)
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --fraction)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --every)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --min-word-length)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --style)
+                    COMPREPLY=($(compgen -W "auto always never" -- "${cur}"))
+                    return 0
+                    ;;
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --exclude)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -453,7 +829,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__reload)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -483,6 +859,38 @@ _bionic__reader() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -491,7 +899,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__session)
-            opts="-h --shell --fraction --every --min-word-length --style --config --exclude --help"
+            opts="-h --shell --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -525,6 +933,38 @@ _bionic__reader() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -533,7 +973,7 @@ _bionic__reader() {
             return 0
             ;;
         bionic__reader__subcmd__toggle)
-            opts="-h --fraction --every --min-word-length --style --config --exclude --help"
+            opts="-h --fraction --every --min-word-length --style --config --exclude --profile --length-rule --emphasis --input-format --format --controls --skip-code --low-latency --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -561,6 +1001,38 @@ _bionic__reader() {
                     ;;
                 --exclude)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "subtle balanced strong" -- "${cur}"))
+                    return 0
+                    ;;
+                --length-rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --emphasis)
+                    COMPREPLY=($(compgen -W "bold underline reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --input-format)
+                    COMPREPLY=($(compgen -W "text markdown terminal" -- "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "ansi plain markdown html" -- "${cur}"))
+                    return 0
+                    ;;
+                --controls)
+                    COMPREPLY=($(compgen -W "safe preserve" -- "${cur}"))
+                    return 0
+                    ;;
+                --skip-code)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --low-latency)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
                     return 0
                     ;;
                 *)

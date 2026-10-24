@@ -27,18 +27,21 @@ include = [
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
+icu_segmenter = "=2.1.2"
 libc = "0.2"
 portable-pty = "0.9"
+pulldown-cmark = { version = "=0.13.1", default-features = false, features = ["html"] }
 serde = { version = "1", features = ["derive"] }
 shell-words = "1"
 signal-hook = "0.3"
 tempfile = "3"
 toml = "0.9"
-unicode-script = "0.5"
 unicode-segmentation = "1.12"
+unicode-width = "=0.2.0"
 
 [dev-dependencies]
 divan = "=0.1.21"
+proptest = { version = "=1.6.0", default-features = false, features = ["std"] }
 
 [[bench]]
 name = "transformer"

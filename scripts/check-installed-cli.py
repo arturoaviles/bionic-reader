@@ -51,6 +51,7 @@ def isolated_environment(home: Path, config_home: Path, path: str) -> dict[str, 
         }
     )
     for name in (
+        "NO_COLOR",
         "BASH_ENV",
         "ENV",
         "BIONIC_READER_CONTROL_SOCKET",
@@ -149,7 +150,7 @@ def run_cli_checks(binary: Path, root: Path, path: str) -> None:
     transformed_input = SMOKE_ANSI + b"\xff\x00\r\n"
     result = invoke(
         binary,
-        ["--style", "always"],
+        ["--style", "always", "--controls", "preserve"],
         malformed_input,
         env,
         work,
@@ -161,9 +162,50 @@ def run_cli_checks(binary: Path, root: Path, path: str) -> None:
     passthrough = b"\x1b[31mreading\x1b[0m\n\xff\x00\r\n"
     for style in ("auto", "never"):
         label = f"{style} style byte preservation"
-        result = invoke(binary, ["--style", style], passthrough, env, work, label)
+        result = invoke(
+            binary,
+            ["--style", style, "--controls", "preserve"],
+            passthrough,
+            env,
+            work,
+            label,
+        )
         require_success(label, result)
         require_bytes(label, result.stdout, passthrough)
+
+    for label, arguments, source, expected in [
+        ("plain export", ["--format", "plain"], b"\x1b[31mreading\x1b[0m", b"reading"),
+        (
+            "safe document controls",
+            ["--style", "never"],
+            b"\x1b]52;c;YXVkaXQ=\x07reading",
+            b"reading",
+        ),
+        (
+            "Markdown code preservation",
+            ["--input-format", "markdown", "--format", "markdown"],
+            b"`reading`",
+            b"`reading`",
+        ),
+        (
+            "profile override",
+            [
+                "--profile",
+                "subtle",
+                "--fraction",
+                "1",
+                "--every",
+                "1",
+                "--style",
+                "always",
+            ],
+            b"reading",
+            b"\x1b[1mreading\x1b[22m",
+        ),
+    ]:
+        result = invoke(binary, arguments, source, env, work, label)
+        require_success(label, result)
+        require_bytes(label, result.stdout, expected)
 
     config_file = config_home / "bionic-reader" / "config.toml"
     config_file.parent.mkdir()
@@ -379,6 +421,7 @@ def run_pty_check(binary: Path, root: Path, path: str) -> None:
     )
     env = isolated_environment(home, config_home, path)
     env["SHELL"] = "/bin/bash"
+    env["TERM"] = "xterm-256color"
 
     pid, master = pty.fork()
     if pid == 0:

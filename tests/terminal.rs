@@ -124,7 +124,8 @@ impl Terminal {
         command.env("HOME", home.path());
         command.env("XDG_CONFIG_HOME", home.path().join(".config"));
         command.env("BASH_SILENCE_DEPRECATION_WARNING", "1");
-        command.env("TERM", "dumb");
+        command.env("TERM", "xterm-256color");
+        command.env_remove("NO_COLOR");
         for name in [
             "BIONIC_READER_DISABLE",
             "BIONIC_READER_SESSION",

@@ -69,3 +69,41 @@ The README now contains local checkout/artifact installation, verification, and 
 The package lifecycle checks execute the installed command and CLI/PTY checks before removal. The Node suite includes a user-writable npm global prefix and executable Yarn/pnpm PATH wrappers. Snap checks preserve the launcher symlink's command name and restore the checker PATH inside the isolated shell after snapd's environment reset. Actual Snap build/install execution requires Ubuntu 24.04 and is a mandatory CI job, not a macOS-local claim.
 
 Strengthened framework tests start the user's interactive shell and let the adapter activate a reading session. This exposed a fish bug: `init fish | source` gave the startup code pipe input, preventing terminal activation. The corrected `eval (bionic-reader init fish | string collect)` preserves terminal input and multiline code. All seven pinned upstream frameworks pass the fresh-shell activation and emphasized-output checks locally on macOS ARM64.
+
+## Engineering priorities and coverage follow-up (2026-10-24)
+
+The priority audit expanded the original terminal MVP according to [ADR 0002](adr/0002-document-rendering-and-reader.md). The implementation now provides ICU4X multilingual word segmentation, grapheme-based fixation, replaceable segmentation and reusable spans, per-length rules and profiles, safe document controls, deterministic default streaming, Markdown-aware source preservation, ANSI/plain/Markdown/HTML output, and an interactive document reader with search and live settings.
+
+The independent review found and the parent fixed: reader signal-setup ordering, C1 sequence residue, nested reference-definition protection, giant-grapheme quadratic work and unbounded retention, repeated rescanning during backward search, reference-catalog reparsing for every Markdown block, and unsafe-link escaping that disabled surrounding Markdown structure. New end-to-end tests also exposed missing inline-code HTML tags, source-layout changes in Markdown-to-ANSI conversion, repeated final reader rows, and omitted inline-code emphasis with code opt-in. Fuzzing found an oversized-control terminator split bug; its minimized behavior is now an ordinary regression. An analogous 64 KiB session-marker boundary is covered and fixed.
+
+| Check | Current local result |
+| --- | --- |
+| Rust 1.85.1 complete suite, macOS ARM64 | 214 passed, including 109 library tests and 42 document integration tests |
+| Actual upstream framework startup workflows | All seven passed with coverage instrumentation |
+| Rustdoc examples and warning-free documentation | Five examples passed; documentation build passed |
+| Generated properties | Five properties passed with 4,096 cases each |
+| End-to-end workflows | Real executable, saved ANSI files, piped input, Markdown reprocessing, HTML export, config/flag precedence, diagnostics, reader PTYs, and interactive shell sessions passed |
+| Rust formatting, Clippy, distribution static checks, actionlint, generated completions | Passed |
+| Installed CLI and PTY checker | Passed with new format, profile, control-policy, and Markdown checks |
+| Linux release streaming memory | 40 MiB transformed; 11,776,000-byte peak RSS and 6,844,416-byte growth after warmup |
+| RustSec lockfile audit | No reported advisories in 117 dependencies using the locally cached advisory database; CI refreshes it |
+
+The first measured minimum-compiler baseline was **84.09% line coverage**. After adding behavioral, error-injection, property, and executable workflow tests, the clean Rust 1.85.1 measurement is **90.58% lines**, **85.57% regions**, and **84.66% functions**. These are measured with cargo-llvm-cov 0.9.1; production files are included. The separate nightly-2026-10-22 run, including the real framework startup workflows, measures **89.25% lines**, **87.80% regions**, **85.04% functions**, and **77.16% branches**. Compiler instrumentation produces different denominators, so the two line percentages are not interchangeable.
+
+| Rust source | Rust 1.85.1 line coverage |
+| --- | --- |
+| `document.rs` | 89.74% |
+| `error.rs` | 100.00% |
+| `main.rs` | 93.33% |
+| `reader.rs` | 90.11% |
+| `segmentation.rs` | 98.73% |
+| `session.rs` | 84.05% |
+| `settings.rs` | 98.85% |
+| `shell.rs` | 95.83% |
+| `transformer.rs` | 93.39% |
+
+**The requested 100% target remains unmet.** The minimum-compiler report contains 771 uncovered lines. The largest remaining area is session worker/startup and operating-system failure handling, together with terminal error paths and defensive diagnostics. Coverage percentages do not establish that every behavior or operating-system fault has been exercised. CI currently prevents regressions below 85% lines, 80% regions, and 80% functions in its nightly report; these are transitional floors, not the 100% target.
+
+The coverage job uploads HTML, JSON, LCOV, and uncovered-line artifacts. It instruments unit, property, CLI, file-pipeline, reader/session PTY, and seven pinned framework workflows. A separate sanitizer fuzz job runs for 60 seconds with Unicode, ANSI, Markdown, malformed-byte, active-control, and oversized-word seeds. The Linux memory gate uses a release build and measures the executable's own peak with `wait4`, avoiding inherited compiler peaks.
+
+Reader working buffers are bounded, including a 4 KiB oversized-grapheme display fallback; the line-position index still grows with the number of lines. Markdown streaming spools to disk and uses bounded blocks/reference data with documented literal fallbacks. Plain/terminal processing retains malformed ordinary bytes; Unicode-dependent document conversion rejects malformed UTF-8, while the interactive view displays replacement characters. These policies are documented in the README and are not claims of linguistic perfection, speed improvement, constant-size indexes, or unlimited parser blocks.

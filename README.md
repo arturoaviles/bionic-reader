@@ -332,7 +332,7 @@ bionic-reader --style always -t 'Save the emphasized text.' > reading.ansi
 printf 'Original text\n' | bionic-reader --style never
 ```
 
-The default `--style auto` adds terminal emphasis only when standard output is a terminal. Redirected output stays plain; `--style always` emits terminal styling even when redirected, and `--style never` disables styling. Existing ANSI formatting is preserved. With no `-t`, an interactive standard input shows help instead of waiting for text.
+The default `--style auto` adds emphasis only on terminal stdout, honoring nonempty `NO_COLOR` and `TERM=dumb`. `--style always` explicitly overrides these hints; `--style never` adds no emphasis. Safe document input preserves presentation styling while removing active terminal controls. Choose `--controls preserve` or `--input-format terminal` for trusted, byte-preserving terminal input. With no `-t`, an interactive standard input shows help instead of waiting for text.
 
 Tune word selection with `--fraction`, `--every`, and `--min-word-length`:
 
@@ -340,17 +340,123 @@ Tune word selection with `--fraction`, `--every`, and `--min-word-length`:
 bionic-reader -t 'Read the first part of each word.' --fraction 0.4 --every 2
 ```
 
-`fraction` is a finite value from `0` to `1`; `every` and `min-word-length` must be positive integers. The default fraction is `0.5`, default frequency is `1`, and default minimum length is `2`. Latin-script letters are emphasized; other scripts, digits, and emoji remain unchanged. Internal apostrophes stay within words, while punctuation such as hyphens separates word segments.
+`fraction` is a finite value from `0` to `1`; `every` and `min-word-length` must be positive integers. The default fraction is `0.5`, default frequency is `1`, and default minimum length is `2`. Word boundaries use ICU4X Unicode segmentation, including dictionary/LSTM data for Chinese, Japanese, Thai, and other complex scripts. Emphasis boundaries use extended grapheme clusters, so accents and emoji sequences stay intact. Only letter graphemes count toward fixation length; digits and emoji receive no added emphasis. Internal apostrophes stay within words and hyphens separate segments. Dictionary segmentation is a default, not a promise of perfect linguistic analysis for every language; the library accepts custom segmenters.
+
+## Document formats and safe input
+
+```sh
+# Preserve Markdown headings, lists, links, and code while adding terminal emphasis.
+bionic-reader --input-format markdown --style always < article.md
+
+# Export Markdown emphasis or escaped HTML. Code is protected by default.
+bionic-reader --input-format markdown --format markdown < article.md > emphasized.md
+bionic-reader --input-format markdown --format html < article.md > article.html
+
+# Remove terminal escapes without adding emphasis; preserve the remaining source text.
+bionic-reader --format plain < colored-output.txt > plain.txt
+
+# Explicitly preserve all controls in trusted terminal output.
+command-producing-terminal-output | bionic-reader --input-format terminal
+```
+
+`--format ansi|plain|markdown|html` selects a representation; `--style` controls
+added emphasis. Markdown/HTML exports add emphasis even when stdout is redirected,
+unless `--style never` is selected. Plain output strips terminal escapes and adds
+no markup. Markdown source processing protects code, link destinations, escapes,
+and entities. Use `--skip-code=false` to emphasize code in ANSI or HTML output; Markdown export requires code protection because CommonMark code cannot contain emphasis without changing its literal content. HTML output escapes raw HTML
+and removes unsafe link schemes. When reprocessing exported Markdown, select
+`--input-format markdown`; ordinary text input treats markup as literal text.
+
+Document input defaults to `--controls safe`. Active controls such as clipboard
+commands, cursor movement, DCS, and unsafe hyperlinks are removed. Tabs, line
+endings, and ordinary content are retained. Reading sessions preserve terminal
+controls because shell applications require them. Safe filtering therefore
+preserves visible content rather than arbitrary active control bytes. ANSI/plain
+processing preserves malformed UTF-8 bytes outside removed controls; Markdown and
+HTML conversion report invalid UTF-8 as an error.
+
+Normal filtering is deterministic across input chunking and delays. It waits for
+a complete word or passes oversized words through at the 64 KiB pending bound.
+For live streams, `--low-latency` flushes a stalled partial word unchanged after
+50 ms; its remaining bytes stay unchanged until the next boundary. Reading
+sessions retain this latency behavior. This explicit mode can change which words
+receive emphasis depending on input timing.
+
+Markdown streaming spools input to disk and parses bounded blocks. A block or reference-definition catalog exceeding 1 MiB uses an unstyled literal fallback, with Markdown/HTML escaping as appropriate; document size itself is unlimited by the streaming API. The in-memory Markdown slice API accepts up to 8 MiB; use `render_stream` for larger documents.
+
+## Fixation profiles and preview
+
+```sh
+bionic-reader --profile subtle -t 'A lighter reading preference.'
+bionic-reader --profile balanced --fraction 0.6 -t 'Explicit values override profiles.'
+bionic-reader --profile strong --emphasis underline -t 'Emphasis without brighter text.'
+
+# Short words get 25%, medium words 50%, and longer words the fallback 70%.
+bionic-reader --length-rule 4:0.25 --length-rule 8:0.5 --fraction 0.7 -t 'Adjust emphasis by word length.'
+
+# Open a live preview; use --print for a noninteractive preview.
+bionic-reader preview
+bionic-reader preview --text 'Reading complex documentation becomes easier.' --print --style always
+```
+
+Profiles initialize `(fraction, every, minimum length)` to subtle `(0.3, 2, 4)`,
+balanced `(0.5, 1, 2)`, or strong `(0.7, 1, 2)`. Explicit numeric flags override
+profile values. Length-rule thresholds are inclusive and must increase; longer
+words use `fraction`. `--min-word-length 4` skips words of three letters or fewer.
+`--emphasis bold|underline|reverse` selects a terminal attribute, preserving
+existing colors and restoring pre-existing intensity/underline/reverse state.
+
+## Interactive document reader
+
+```sh
+bionic-reader read article.txt
+cat article.txt | bionic-reader read
+```
+
+The reader spools input to a temporary file and uses the controlling terminal for
+keyboard input, so piped documents work. It strips active controls before display,
+wraps on grapheme boundaries, responds to resizing, and restores terminal settings
+on exit, errors, and handled termination signals. Invalid UTF-8 is shown with replacement characters. A grapheme exceeding 4 KiB is displayed as one replacement cell while its full source range remains intact on disk. A line-position index is kept
+in memory; document text and search scans stay on disk.
+
+| Key | Action |
+| --- | --- |
+| Arrow keys / `j`, `k` | Scroll |
+| Page Up / Page Down | Move a page |
+| Home / End / `g`, `G` | First / last position |
+| `/`, then Enter | Search |
+| `n`, `N` | Next / previous match |
+| `+`, `-` | Increase / decrease fixation fraction |
+| `[` / `]` | Adjust emphasis frequency |
+| `m` / `M` | Adjust minimum word length |
+| `p` | Cycle profiles |
+| `s` | Show or hide the settings panel |
+| `?` | Help |
+| `q`, Escape, Ctrl-C | Exit |
+
+Use `--input-format markdown read article.md` to protect code and link destinations in the reader.
+
+Reader adjustments apply to the current view and do not overwrite the config
+file. The reader requires a controlling terminal; exported formats work in
+noninteractive pipelines.
 
 ## Configuration
 
 Settings are read from `$XDG_CONFIG_HOME/bionic-reader/config.toml`, or `~/.config/bionic-reader/config.toml` when `XDG_CONFIG_HOME` is unset or empty. Create that file with your preferred editor, using settings such as:
 
 ```toml
+profile = "balanced"
 fraction = 0.5
 every = 1
 min_word_length = 2
 style = "auto"
+emphasis = "bold"
+input_format = "text"
+format = "ansi"
+controls = "safe"
+skip_code = true
+low_latency = false
+length_rules = [{ max_length = 4, fraction = 0.25 }, { max_length = 8, fraction = 0.5 }]
 exclude_commands = ["my-pager"]
 ```
 
@@ -585,3 +691,17 @@ Remove the standalone initialization line or the framework activation entry you 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Tests and measured coverage
+
+`cargo test --locked --all-targets` runs unit tests, generated properties, CLI/file-pipeline end-to-end tests, and real PTY tests for reader and shell sessions. `scripts/check-frameworks.sh` additionally fetches seven pinned upstream frameworks and verifies their real startup paths. CI also compiles, installs, runs, and removes repository-built packages through every documented package-manager route.
+
+The coverage job uploads HTML, JSON, LCOV, and an uncovered-line report as the `coverage-reports` artifact. The goal is 100%; the current coverage and remaining gaps are recorded in [the verification report](docs/verification.md). Production files are not excluded to improve the percentage. Reproduce the instrumented suite with:
+
+```sh
+rustup toolchain install nightly-2026-10-22 --profile minimal --component llvm-tools-preview
+cargo +nightly-2026-10-22 install cargo-llvm-cov --version 0.9.1 --locked
+cargo +nightly-2026-10-22 llvm-cov --branch --locked --all-targets --html
+```
+
+Use `cargo +nightly-2026-10-22 llvm-cov report --show-missing-lines` to inspect gaps, or add `--fail-under-lines 100` to check the target strictly. Line, region, function, and branch percentages are separate measurements; passing end-to-end tests does not imply complete coverage.

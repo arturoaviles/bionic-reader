@@ -14,3 +14,7 @@ __pycache__/
 /.snap/
 /.snapcraft/
 .DS_Store
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+*.proptest-regressions

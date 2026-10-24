@@ -8,6 +8,9 @@ mod error;
 #[doc(inline)]
 pub use error::Error;
 
+pub mod document;
+pub mod reader;
+pub mod segmentation;
 pub mod session;
 pub mod settings;
 pub mod shell;

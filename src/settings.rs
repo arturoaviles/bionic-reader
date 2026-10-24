@@ -37,8 +37,99 @@ pub enum Style {
     Auto,
     /// Enable emphasis regardless of the output destination.
     Always,
-    /// Disable emphasis and pass output through unchanged.
+    /// Disable added emphasis; configured format and input-control processing still apply.
     Never,
+}
+
+impl Style {
+    /// Resolves terminal styling, honoring nonempty `NO_COLOR` and `TERM=dumb` in auto mode.
+    /// An explicit `Always` enables styling even when these environment hints are set.
+    #[must_use]
+    pub fn enabled(self, is_terminal: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Auto => {
+                is_terminal
+                    && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+                    && env::var_os("TERM").is_none_or(|value| value != "dumb")
+            }
+        }
+    }
+}
+
+/// Built-in fixation preferences, applied before explicit numeric settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Profile {
+    /// Emphasize fewer, longer words with a shorter prefix.
+    Subtle,
+    /// Emphasize half of each eligible word.
+    Balanced,
+    /// Emphasize a longer prefix of every eligible word.
+    Strong,
+}
+
+/// The terminal attribute used to distinguish selected word prefixes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Emphasis {
+    /// Use bold intensity, restoring the original bold and faint attributes.
+    #[default]
+    Bold,
+    /// Use underlining without changing text colors or intensity.
+    Underline,
+    /// Use reverse video without selecting a brighter foreground color.
+    Reverse,
+}
+
+/// How input bytes should be interpreted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputFormat {
+    /// Ordinary text with the configured terminal-control policy.
+    #[default]
+    Text,
+    /// `CommonMark` source with protected syntax and code spans.
+    Markdown,
+    /// Trusted terminal output whose existing controls must be preserved.
+    Terminal,
+}
+
+/// The representation emitted by document rendering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    /// Terminal emphasis, subject to the style policy.
+    #[default]
+    Ansi,
+    /// Original text without terminal escape sequences or added emphasis.
+    Plain,
+    /// Markdown source with emphasis syntax around selected prefixes.
+    Markdown,
+    /// Escaped HTML with semantic emphasis elements.
+    Html,
+}
+
+/// Policy for control sequences supplied by a document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ControlPolicy {
+    /// Permit presentation styling and safe hyperlinks; remove active controls.
+    #[default]
+    Safe,
+    /// Preserve terminal control bytes for trusted sources.
+    Preserve,
+}
+
+/// An inclusive word-length threshold with its own emphasis fraction.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LengthRule {
+    /// Largest eligible letter-grapheme count covered by this rule.
+    pub max_length: usize,
+    /// Fraction of the selected word to emphasize, from zero through one.
+    pub fraction: f64,
 }
 
 /// Settings that control bionic reading emphasis and command passthrough.
@@ -58,6 +149,22 @@ pub struct Settings {
     pub style: Style,
     /// Commands whose output should remain in passthrough mode during a session.
     pub exclude_commands: Vec<String>,
+    /// Optional named preference from which numeric settings were initialized.
+    pub profile: Option<Profile>,
+    /// Increasing inclusive length thresholds; unmatched words use `fraction`.
+    pub length_rules: Vec<LengthRule>,
+    /// Terminal attribute used for emphasis.
+    pub emphasis: Emphasis,
+    /// Input syntax for document processing.
+    pub input_format: InputFormat,
+    /// Output representation for document processing.
+    pub format: OutputFormat,
+    /// Treatment of controls in document input; reading sessions retain terminal controls.
+    pub controls: ControlPolicy,
+    /// Leave Markdown inline and fenced code unchanged.
+    pub skip_code: bool,
+    /// Flush stalled partial words unchanged after 50 ms instead of waiting for a boundary.
+    pub low_latency: bool,
 }
 
 /// Optional configuration values that override [`Settings`] defaults and files.
@@ -65,7 +172,8 @@ pub struct Settings {
 /// Unspecified fields leave the resolved settings unchanged. Custom command
 /// exclusions are appended to the built-in list and deduplicated.
 /// Use struct update syntax with [`Default`] to set only selected values.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Overrides {
     /// Fraction of each selected word's letters to emphasize, from `0.0` to `1.0`.
     pub fraction: Option<f64>,
@@ -77,6 +185,22 @@ pub struct Overrides {
     pub style: Option<Style>,
     /// Additional command names to keep in passthrough mode during a session.
     pub exclude_commands: Option<Vec<String>>,
+    /// Named preference applied before explicit numeric overrides.
+    pub profile: Option<Profile>,
+    /// Replacement length-specific emphasis rules.
+    pub length_rules: Option<Vec<LengthRule>>,
+    /// Terminal emphasis attribute override.
+    pub emphasis: Option<Emphasis>,
+    /// Document input syntax override.
+    pub input_format: Option<InputFormat>,
+    /// Document output representation override.
+    pub format: Option<OutputFormat>,
+    /// Input terminal-control policy override.
+    pub controls: Option<ControlPolicy>,
+    /// Override Markdown code protection.
+    pub skip_code: Option<bool>,
+    /// Override low-latency streaming fallback.
+    pub low_latency: Option<bool>,
 }
 
 impl Overrides {
@@ -100,6 +224,14 @@ impl Default for Settings {
             every: 1,
             min_word_length: 2,
             style: Style::Auto,
+            profile: None,
+            length_rules: Vec::new(),
+            emphasis: Emphasis::Bold,
+            input_format: InputFormat::Text,
+            format: OutputFormat::Ansi,
+            controls: ControlPolicy::Safe,
+            skip_code: true,
+            low_latency: false,
             exclude_commands: DEFAULT_EXCLUDE_COMMANDS
                 .iter()
                 .map(|command| (*command).to_owned())
@@ -134,20 +266,16 @@ impl Settings {
         if let Some(path) = path {
             match fs::read_to_string(&path) {
                 Ok(contents) => {
-                    let configured: Settings = toml::from_str(&contents).map_err(|error| {
+                    let configured: Overrides = toml::from_str(&contents).map_err(|error| {
                         Error::invalid_input_with_source(
                             format!("invalid configuration file {}", path.display()),
                             error,
                         )
                     })?;
-                    configured.validate().map_err(|error| {
+                    settings.apply_overrides(&configured);
+                    settings.validate().map_err(|error| {
                         error.context(format!("invalid configuration file {}", path.display()))
                     })?;
-                    settings.fraction = configured.fraction;
-                    settings.every = configured.every;
-                    settings.min_word_length = configured.min_word_length;
-                    settings.style = configured.style;
-                    append_unique(&mut settings.exclude_commands, &configured.exclude_commands);
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound && explicit.is_none() => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -165,24 +293,71 @@ impl Settings {
             }
         }
 
-        if let Some(value) = overrides.fraction {
-            settings.fraction = value;
-        }
-        if let Some(value) = overrides.every {
-            settings.every = value;
-        }
-        if let Some(value) = overrides.min_word_length {
-            settings.min_word_length = value;
-        }
-        if let Some(value) = overrides.style {
-            settings.style = value;
-        }
-        if let Some(values) = &overrides.exclude_commands {
-            append_unique(&mut settings.exclude_commands, values);
-        }
+        settings.apply_overrides(overrides);
 
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// Applies a preset before any explicit numeric or length-rule overrides.
+    pub fn apply_profile(&mut self, profile: Profile) {
+        self.profile = Some(profile);
+        (self.fraction, self.every, self.min_word_length) = match profile {
+            Profile::Subtle => (0.3, 2, 4),
+            Profile::Balanced => (0.5, 1, 2),
+            Profile::Strong => (0.7, 1, 2),
+        };
+    }
+
+    /// Resolves the first inclusive length rule, falling back to the global fraction.
+    #[must_use]
+    pub fn fraction_for_length(&self, length: usize) -> f64 {
+        self.length_rules
+            .iter()
+            .find(|rule| length <= rule.max_length)
+            .map_or(self.fraction, |rule| rule.fraction)
+    }
+
+    fn apply_overrides(&mut self, overrides: &Overrides) {
+        if let Some(profile) = overrides.profile {
+            self.apply_profile(profile);
+        }
+        if let Some(value) = overrides.fraction {
+            self.fraction = value;
+        }
+        if let Some(value) = overrides.every {
+            self.every = value;
+        }
+        if let Some(value) = overrides.min_word_length {
+            self.min_word_length = value;
+        }
+        if let Some(value) = overrides.style {
+            self.style = value;
+        }
+        if let Some(value) = overrides.emphasis {
+            self.emphasis = value;
+        }
+        if let Some(value) = overrides.input_format {
+            self.input_format = value;
+        }
+        if let Some(value) = overrides.format {
+            self.format = value;
+        }
+        if let Some(value) = overrides.controls {
+            self.controls = value;
+        }
+        if let Some(value) = overrides.skip_code {
+            self.skip_code = value;
+        }
+        if let Some(value) = overrides.low_latency {
+            self.low_latency = value;
+        }
+        if let Some(values) = &overrides.length_rules {
+            self.length_rules.clone_from(values);
+        }
+        if let Some(values) = &overrides.exclude_commands {
+            append_unique(&mut self.exclude_commands, values);
+        }
     }
 
     /// Checks that all settings are within their supported ranges.
@@ -206,6 +381,17 @@ impl Settings {
             return Err(Error::invalid_input(
                 "min_word_length must be a positive integer".to_owned(),
             ));
+        }
+        let mut previous = 0;
+        for rule in &self.length_rules {
+            if rule.max_length <= previous
+                || !rule.fraction.is_finite()
+                || !(0.0..=1.0).contains(&rule.fraction)
+            {
+                return Err(Error::invalid_input(
+                    "length_rules need strictly increasing positive max_length values and finite fractions between 0 and 1".to_owned()));
+            }
+            previous = rule.max_length;
         }
         if self
             .exclude_commands
@@ -346,5 +532,79 @@ mod tests {
         assert!(error.is_invalid_input());
         assert_eq!(error.io_kind(), Some(std::io::ErrorKind::NotFound));
         assert!(error.source().is_some());
+    }
+    #[test]
+    fn all_presentation_overrides_are_applied_and_length_thresholds_are_inclusive() {
+        use super::{
+            ControlPolicy, Emphasis, InputFormat, LengthRule, OutputFormat, Profile, Style,
+        };
+        let overrides = Overrides {
+            profile: Some(Profile::Balanced),
+            fraction: Some(0.75),
+            every: Some(3),
+            min_word_length: Some(4),
+            style: Some(Style::Always),
+            emphasis: Some(Emphasis::Underline),
+            input_format: Some(InputFormat::Markdown),
+            format: Some(OutputFormat::Html),
+            controls: Some(ControlPolicy::Preserve),
+            skip_code: Some(false),
+            low_latency: Some(true),
+            length_rules: Some(vec![LengthRule {
+                max_length: 4,
+                fraction: 0.25,
+            }]),
+            exclude_commands: Some(vec!["custom-reader".to_owned()]),
+        };
+        let mut settings = Settings::new();
+        settings.apply_overrides(&overrides);
+        settings.validate().expect("all overrides are valid");
+        assert_eq!(settings.every, 3);
+        assert_eq!(settings.min_word_length, 4);
+        assert_eq!(settings.style, Style::Always);
+        assert_eq!(settings.emphasis, Emphasis::Underline);
+        assert_eq!(settings.input_format, InputFormat::Markdown);
+        assert_eq!(settings.format, OutputFormat::Html);
+        assert_eq!(settings.controls, ControlPolicy::Preserve);
+        assert!(!settings.skip_code);
+        assert!(settings.low_latency);
+        assert_eq!(
+            settings.fraction_for_length(4).to_bits(),
+            0.25_f64.to_bits()
+        );
+        assert_eq!(
+            settings.fraction_for_length(5).to_bits(),
+            0.75_f64.to_bits()
+        );
+        assert!(
+            settings
+                .exclude_commands
+                .iter()
+                .any(|command| command == "custom-reader")
+        );
+        let empty = Overrides::new();
+        assert!(empty.fraction.is_none());
+    }
+
+    #[test]
+    fn unreadable_configuration_and_empty_exclusions_are_rejected() {
+        let directory = tempfile::tempdir().expect("create configuration directory");
+        let error = Settings::load(Some(directory.path()), &Overrides::new())
+            .expect_err("a directory is not a config file");
+        assert!(
+            error
+                .to_string()
+                .contains("could not read configuration file")
+        );
+        let settings = Settings {
+            exclude_commands: vec![" ".to_owned()],
+            ..Settings::new()
+        };
+        assert!(
+            settings
+                .validate()
+                .expect_err("empty exclusion is invalid")
+                .is_invalid_input()
+        );
     }
 }

@@ -283,6 +283,9 @@ fn assert_framework_session(shell: &str, home: &Path, extra_path: Option<PathBuf
     command.env("XDG_DATA_HOME", home.join(".local/share"));
     command.env("XDG_CACHE_HOME", home.join(".cache"));
     command.env("TERM", "xterm-256color");
+    command.env_remove("NO_COLOR");
+    // This PTY harness has no terminal emulator to answer fish capability probes.
+    command.env("fish_features", "no-query-term");
     command.env(
         "BIONIC_READER_INIT_LOG",
         home.join("bionic-reader-init-count"),

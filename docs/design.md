@@ -2,7 +2,9 @@
 
 Status: specification published as [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1). The Rust CLI, reading sessions, shell adapters, tests, and distribution candidate tooling are implemented. The [source repository](https://github.com/arturoaviles/bionic-reader) is public. Package publication remains gated on the release prerequisites below. This document records agreed product decisions and synthesized implementation defaults; use the published specification as the implementation reference.
 
-## Product
+The engineering-priority expansion is specified in [ADR 0002](adr/0002-document-rendering-and-reader.md). It supersedes the Latin-only scope, unconditional filter deadline, and single output representation below. The original product decisions remain historical context for compatibility.
+
+## Original product
 
 - Build a Rust CLI named `bionic-reader` that performs local word-prefix emphasis, with no external text-processing service.
 - Accept explicit text with `bionic-reader -t "<TEXT>"` and stdin with `cat <file> | bionic-reader`.

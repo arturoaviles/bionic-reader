@@ -276,4 +276,15 @@ mod tests {
                 .starts_with("configuration file does not exist")
         );
     }
+    #[test]
+    fn empty_context_and_hidden_operating_system_sources_keep_diagnostics_precise() {
+        let error = super::Error::with_source_hidden(
+            String::new(),
+            std::io::Error::other("private detail"),
+        )
+        .context("public explanation".to_owned());
+        assert_eq!(error.to_string(), "public explanation");
+        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::Other));
+        assert!(std::error::Error::source(&error).is_some());
+    }
 }

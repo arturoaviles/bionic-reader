@@ -5,12 +5,14 @@
 
 use std::collections::BTreeMap;
 use std::mem;
+use std::ops::Range;
 use std::str;
 
-use unicode_script::Script;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Error;
-use crate::settings::Settings;
+use crate::segmentation::{FixationEngine, UnicodeSegmenter, WordSegmenter, is_word_connector};
+use crate::settings::{Emphasis, Settings};
 
 const MAX_PENDING: usize = 64 * 1024;
 
@@ -42,10 +44,63 @@ struct ParseResult {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "terminal attributes track independent SGR state and style certainty"
+)]
 struct StyleState {
     bold: bool,
     dim: bool,
+    underline: UnderlineStyle,
+    reverse: bool,
     known: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum UnderlineStyle {
+    #[default]
+    Off,
+    Single,
+    Double,
+    DoubleSgr21,
+    Curly,
+    Dotted,
+    Dashed,
+    Other(u16),
+}
+
+impl UnderlineStyle {
+    fn from_colon_parameter(parameter: Option<u16>) -> Option<Self> {
+        match parameter {
+            Some(0) => Some(Self::Off),
+            Some(1) => Some(Self::Single),
+            Some(2) => Some(Self::Double),
+            Some(3) => Some(Self::Curly),
+            Some(4) => Some(Self::Dotted),
+            Some(5) => Some(Self::Dashed),
+            Some(other) => Some(Self::Other(other)),
+            None => None,
+        }
+    }
+
+    const fn is_active(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    fn write_start(self, output: &mut Vec<u8>) {
+        match self {
+            Self::Off => {}
+            Self::Single => output.extend_from_slice(b"\x1b[4m"),
+            Self::DoubleSgr21 => output.extend_from_slice(b"\x1b[21m"),
+            Self::Double => output.extend_from_slice(b"\x1b[4:2m"),
+            Self::Curly => output.extend_from_slice(b"\x1b[4:3m"),
+            Self::Dotted => output.extend_from_slice(b"\x1b[4:4m"),
+            Self::Dashed => output.extend_from_slice(b"\x1b[4:5m"),
+            Self::Other(parameter) => {
+                output.extend_from_slice(format!("\x1b[4:{parameter}m").as_bytes());
+            }
+        }
+    }
 }
 
 impl StyleState {
@@ -81,13 +136,32 @@ impl StyleState {
                 continue;
             }
             match param.code {
-                0 | 22 => {
+                0 => {
                     self.bold = false;
                     self.dim = false;
+                    self.underline = UnderlineStyle::Off;
+                    self.reverse = false;
                     self.known = true;
                 }
                 1 if self.known => self.bold = true,
                 2 if self.known => self.dim = true,
+                4 if self.known && param.colon_form => {
+                    if let Some(underline) = UnderlineStyle::from_colon_parameter(param.colon_value)
+                    {
+                        self.underline = underline;
+                    } else {
+                        self.known = false;
+                    }
+                }
+                4 if self.known => self.underline = UnderlineStyle::Single,
+                21 if self.known => self.underline = UnderlineStyle::DoubleSgr21,
+                7 if self.known => self.reverse = true,
+                22 => {
+                    self.bold = false;
+                    self.dim = false;
+                }
+                24 => self.underline = UnderlineStyle::Off,
+                27 => self.reverse = false,
                 _ => {}
             }
             index += 1;
@@ -97,9 +171,10 @@ impl StyleState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GraphemeKind {
-    LatinLetter,
+    Letter,
     Apostrophe,
-    Mark,
+    Connector,
+    Number,
     Raw,
     Other,
 }
@@ -122,6 +197,7 @@ struct CharMap {
 struct SgrParam {
     code: u16,
     colon_form: bool,
+    colon_value: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -140,13 +216,6 @@ struct DrainingControl {
     tracking: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct EmphasisSettings {
-    fraction: f64,
-    every: usize,
-    min_word_length: usize,
-}
-
 /// Transforms terminal output while preserving stream boundaries and controls.
 ///
 /// Original text bytes and terminal controls retain their order; only emphasis
@@ -163,14 +232,16 @@ struct EmphasisSettings {
     reason = "independent stream states can coexist, including a partial word and an uncertain terminal style"
 )]
 pub struct Transformer {
-    settings: EmphasisSettings,
+    fixation: FixationEngine,
+    segmenter: Box<dyn WordSegmenter>,
+    emphasis: Emphasis,
     enabled: bool,
     pending: Vec<u8>,
     pending_word: bool,
     style: StyleState,
-    eligible_seen: usize,
     passthrough_word: bool,
-    passthrough_word_letters: usize,
+    passthrough_context: String,
+    passthrough_collapsed_letters: usize,
     passthrough_apostrophe: bool,
     draining_control: Option<DrainingControl>,
 }
@@ -189,26 +260,55 @@ impl Transformer {
         Self::try_new(settings, enabled).expect("transformer settings must be valid")
     }
 
+    /// Creates a transformer that uses a caller-supplied word segmenter.
+    ///
+    /// The segmenter must return sorted, non-overlapping UTF-8 and grapheme-aligned
+    /// ranges, as documented by [`WordSegmenter`].
+    ///
+    /// # Panics
+    ///
+    /// Panics immediately if settings are invalid. Use
+    /// [`Self::try_new_with_segmenter`] for untrusted settings.
+    pub fn new_with_segmenter(
+        settings: &Settings,
+        enabled: bool,
+        segmenter: Box<dyn WordSegmenter>,
+    ) -> Self {
+        Self::try_new_with_segmenter(settings, enabled, segmenter)
+            .expect("transformer settings must be valid")
+    }
+
     /// Validates settings and creates a transformer with its own emphasis snapshot.
     ///
     /// # Errors
     ///
     /// Returns an error when [`Settings::validate`] rejects the supplied settings.
     pub fn try_new(settings: &Settings, enabled: bool) -> Result<Self, Error> {
+        Self::try_new_with_segmenter(settings, enabled, Box::new(UnicodeSegmenter::new()))
+    }
+
+    /// Validates settings and creates a transformer with a caller-supplied segmenter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when [`Settings::validate`] rejects the supplied settings.
+    pub fn try_new_with_segmenter(
+        settings: &Settings,
+        enabled: bool,
+        segmenter: Box<dyn WordSegmenter>,
+    ) -> Result<Self, Error> {
         settings.validate()?;
         Ok(Self {
-            settings: EmphasisSettings {
-                fraction: settings.fraction,
-                every: settings.every,
-                min_word_length: settings.min_word_length,
-            },
+            fixation: FixationEngine::new(settings),
+            segmenter,
+            emphasis: settings.emphasis,
             enabled,
             pending: Vec::new(),
             pending_word: false,
             style: StyleState::initial(),
-            eligible_seen: 0,
             passthrough_word: false,
-            passthrough_word_letters: 0,
+            passthrough_context: String::new(),
+            passthrough_collapsed_letters: 0,
             passthrough_apostrophe: false,
             draining_control: None,
         })
@@ -227,38 +327,65 @@ impl Transformer {
 
         let mut output = Vec::new();
         let mut remaining = input;
-
-        if self.draining_control.is_some() {
-            let (bytes, rest) = self.drain_control(remaining);
-            output.extend_from_slice(bytes);
-            remaining = rest;
-            if remaining.is_empty() {
-                return output;
+        while !remaining.is_empty() {
+            if self.draining_control.is_some() {
+                let previous_len = remaining.len();
+                let (bytes, rest) = self.drain_control(remaining);
+                output.extend_from_slice(bytes);
+                remaining = rest;
+                if remaining.len() == previous_len {
+                    break;
+                }
+                if remaining.is_empty() {
+                    break;
+                }
             }
-        }
 
-        if self.passthrough_word {
-            self.pending.extend_from_slice(remaining);
-            let (raw, resume) = self.passthrough_until_delimiter();
-            output.extend(raw);
-            if resume {
+            if self.passthrough_word
+                && self
+                    .pending
+                    .len()
+                    .saturating_add(self.passthrough_context.len())
+                    >= MAX_PENDING
+            {
+                self.collapse_passthrough_context();
+            }
+
+            let available = MAX_PENDING
+                .saturating_sub(self.pending.len())
+                .saturating_sub(self.passthrough_context.len());
+            if available == 0 {
+                if self.passthrough_word {
+                    output.extend(self.release_passthrough_pending());
+                } else {
+                    output.extend(self.fallback_pending());
+                }
+                continue;
+            }
+
+            let count = remaining.len().min(available);
+            let appended = &remaining[..count];
+            self.pending.extend_from_slice(appended);
+            remaining = &remaining[count..];
+
+            if self.passthrough_word {
+                let (raw, resume) = self.passthrough_until_delimiter();
+                output.extend(raw);
+                if resume {
+                    output.extend(self.process_available());
+                }
+                if self.pending.len() >= MAX_PENDING {
+                    output.extend(self.release_passthrough_pending());
+                }
+                continue;
+            }
+
+            if !self.pending_word || !chunk_can_extend_word(appended) {
                 output.extend(self.process_available());
             }
-            return output;
-        }
-
-        if self.pending_word {
-            self.pending.extend_from_slice(remaining);
-            if !chunk_can_extend_word(remaining) || self.pending.len() > MAX_PENDING {
-                output.extend(self.process_available());
+            if self.pending.len() >= MAX_PENDING {
+                output.extend(self.fallback_pending());
             }
-        } else {
-            self.pending.extend_from_slice(remaining);
-            output.extend(self.process_available());
-        }
-
-        if self.pending.len() > MAX_PENDING {
-            output.extend(self.fallback_pending());
         }
         output
     }
@@ -271,6 +398,9 @@ impl Transformer {
     pub fn flush_pending(&mut self) -> Vec<u8> {
         if self.pending.is_empty() {
             return Vec::new();
+        }
+        if self.passthrough_word {
+            return self.release_passthrough_pending();
         }
         self.fallback_pending()
     }
@@ -301,9 +431,14 @@ impl Transformer {
         }
 
         if self.passthrough_word {
+            let (tokens, _) = scan_tokens(&self.pending, /* eof */ false);
+            let (visible, _) = visible_text(&tokens);
+            self.advance_passthrough_text(&visible, true);
             output.append(&mut self.pending);
             self.passthrough_word = false;
             self.pending_word = false;
+            self.passthrough_context.clear();
+            self.passthrough_collapsed_letters = 0;
             return output;
         }
 
@@ -324,7 +459,13 @@ impl Transformer {
 
         let (tokens, parse) = scan_tokens(&self.pending, /* eof */ false);
         let graphemes = graphemes(&tokens);
-        let candidate = trailing_candidate_start(&graphemes);
+        let candidate = trailing_candidate_start(&graphemes)
+            .into_iter()
+            .chain(trailing_segmenter_candidate(
+                &tokens,
+                self.segmenter.as_ref(),
+            ))
+            .min();
         self.pending_word = candidate.is_some();
         let safe_token_count = candidate.unwrap_or(tokens.len());
         let cut = if let Some(token) = candidate {
@@ -352,20 +493,28 @@ impl Transformer {
         let (tokens, parse) = scan_tokens(&source, /* eof */ false);
         self.update_style_from_tokens(&source, &tokens);
         let graphemes = graphemes(&tokens);
-        if let Some(candidate) = trailing_candidate_start(&graphemes) {
+        let (visible, _) = visible_text(&tokens);
+        let candidate = trailing_candidate_start(&graphemes)
+            .into_iter()
+            .chain(trailing_segmenter_candidate(
+                &tokens,
+                self.segmenter.as_ref(),
+            ))
+            .min();
+        if candidate.is_some() {
             self.passthrough_word = true;
-            self.passthrough_word_letters = graphemes
-                .iter()
-                .filter(|unit| unit.start_token >= candidate)
-                .filter(|unit| unit.kind == GraphemeKind::LatinLetter)
-                .count();
+            self.passthrough_context.clear();
+            self.passthrough_collapsed_letters = 0;
+            self.advance_passthrough_text(&visible, false);
             self.passthrough_apostrophe = graphemes
                 .last()
                 .is_some_and(|unit| unit.kind == GraphemeKind::Apostrophe);
         } else {
             self.passthrough_word = false;
-            self.passthrough_word_letters = 0;
+            self.passthrough_context.clear();
+            self.passthrough_collapsed_letters = 0;
             self.passthrough_apostrophe = false;
+            self.advance_passthrough_text(&visible, true);
         }
         self.pending_word = false;
 
@@ -384,13 +533,79 @@ impl Transformer {
     }
 
     #[must_use]
+    fn release_passthrough_pending(&mut self) -> Vec<u8> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+
+        let source = mem::take(&mut self.pending);
+        let (tokens, parse) = scan_tokens(&source, /* eof */ false);
+        self.update_style_from_tokens(&source[..parse.complete_len], &tokens);
+        let mut output = source[..parse.complete_len].to_vec();
+        if let Some(start) = parse.incomplete_at {
+            let tail = &source[start..];
+            if tail.first() == Some(&0x1b) {
+                let drain = DrainingControl::new(tail);
+                if !drain.tracking {
+                    self.style.known = false;
+                }
+                self.draining_control = Some(drain);
+            }
+            output.extend_from_slice(tail);
+        }
+        output
+    }
+
+    fn advance_passthrough_text(&mut self, appended: &str, final_boundary: bool) {
+        if self.passthrough_collapsed_letters > 0 {
+            self.passthrough_collapsed_letters = self
+                .passthrough_collapsed_letters
+                .saturating_add(letter_grapheme_count(appended));
+            if final_boundary {
+                self.fixation
+                    .advance_if_eligible(self.passthrough_collapsed_letters);
+                self.passthrough_collapsed_letters = 0;
+                self.passthrough_context.clear();
+            }
+            return;
+        }
+
+        let mut text = mem::take(&mut self.passthrough_context);
+        text.push_str(appended);
+        let ranges = self.segmenter.word_ranges(&text);
+        let trailing_start = if final_boundary {
+            None
+        } else {
+            segmenter_trailing_start(self.segmenter.as_ref(), &text)
+                .or_else(|| trailing_grapheme_candidate_start(&text))
+        };
+        let end_before = trailing_start.unwrap_or(text.len());
+        self.fixation
+            .advance_ranges_before(&text, &ranges, end_before);
+
+        if final_boundary {
+            self.passthrough_context.clear();
+        } else if let Some(start) = trailing_start {
+            self.passthrough_context.push_str(&text[start..]);
+        }
+    }
+
+    fn collapse_passthrough_context(&mut self) {
+        if self.passthrough_context.is_empty() {
+            return;
+        }
+        self.passthrough_collapsed_letters = self
+            .passthrough_collapsed_letters
+            .saturating_add(letter_grapheme_count(&self.passthrough_context));
+        self.passthrough_context.clear();
+    }
+
+    #[must_use]
     fn passthrough_until_delimiter(&mut self) -> (Vec<u8>, bool) {
         let (tokens, parse) = scan_tokens(&self.pending, /* eof */ false);
         let units = graphemes(&tokens);
-        let mut letters = 0_usize;
         let delimiter_index = units.iter().position(|unit| match unit.kind {
-            GraphemeKind::LatinLetter => {
-                letters = letters.saturating_add(1);
+            GraphemeKind::Letter | GraphemeKind::Number | GraphemeKind::Connector => {
                 self.passthrough_apostrophe = false;
                 false
             }
@@ -398,19 +613,15 @@ impl Transformer {
                 self.passthrough_apostrophe = true;
                 false
             }
-            GraphemeKind::Mark if !self.passthrough_apostrophe => false,
             _ => true,
         });
-        self.passthrough_word_letters = self.passthrough_word_letters.saturating_add(letters);
 
         if let Some(delimiter_index) = delimiter_index {
-            if self.passthrough_word_letters >= self.settings.min_word_length {
-                self.eligible_seen = self.eligible_seen.saturating_add(1);
-            }
-            self.passthrough_word_letters = 0;
-            self.passthrough_apostrophe = false;
             let delimiter = &units[delimiter_index];
             let cut = tokens[delimiter.end_token - 1].end;
+            let (visible_prefix, _) = visible_text(&tokens[..delimiter.start_token]);
+            self.advance_passthrough_text(&visible_prefix, true);
+            self.passthrough_apostrophe = false;
             let source = self.pending[..cut].to_vec();
             self.update_style_from_tokens(&source, &tokens[..delimiter.end_token]);
             let raw: Vec<u8> = self.pending.drain(..cut).collect();
@@ -420,6 +631,8 @@ impl Transformer {
 
         let cut = parse.complete_len;
         let source = self.pending[..cut].to_vec();
+        let (visible, _) = visible_text(&tokens);
+        self.advance_passthrough_text(&visible, false);
         self.update_style_from_tokens(&source, &tokens);
         let raw: Vec<u8> = self.pending.drain(..cut).collect();
         (raw, false)
@@ -459,8 +672,12 @@ impl Transformer {
 
     #[must_use]
     fn render(&mut self, source: &[u8], tokens: &[Token]) -> Vec<u8> {
-        let starts = select_emphasis(tokens, &self.settings, &mut self.eligible_seen);
-        render_ansi(source, tokens, &starts, &mut self.style)
+        let starts = self.select_emphasis(tokens);
+        render_ansi(source, tokens, &starts, &mut self.style, self.emphasis)
+    }
+
+    fn select_emphasis(&mut self, tokens: &[Token]) -> BTreeMap<usize, usize> {
+        select_emphasis(tokens, &mut self.fixation, self.segmenter.as_ref())
     }
 
     fn update_style_from_tokens(&mut self, source: &[u8], tokens: &[Token]) {
@@ -474,86 +691,13 @@ impl Transformer {
     }
 }
 
-// Word selection is independent of ANSI emission and style restoration.
-#[must_use]
-fn select_emphasis(
-    tokens: &[Token],
-    settings: &EmphasisSettings,
-    eligible_seen: &mut usize,
-) -> BTreeMap<usize, usize> {
-    let units = graphemes(tokens);
-    let mut starts: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut cursor = 0;
-    while cursor < units.len() {
-        if units[cursor].kind != GraphemeKind::LatinLetter {
-            cursor += 1;
-            continue;
-        }
-
-        let first = cursor;
-        let mut letters = vec![cursor];
-        cursor += 1;
-        while cursor < units.len() {
-            if units[cursor].kind == GraphemeKind::LatinLetter {
-                letters.push(cursor);
-                cursor += 1;
-            } else if units[cursor].kind == GraphemeKind::Apostrophe
-                && cursor + 1 < units.len()
-                && units[cursor + 1].kind == GraphemeKind::LatinLetter
-            {
-                cursor += 1;
-                letters.push(cursor);
-                cursor += 1;
-            } else {
-                break;
-            }
-        }
-
-        if letters.len() < settings.min_word_length {
-            continue;
-        }
-
-        *eligible_seen = eligible_seen.saturating_add(1);
-        let selected = (*eligible_seen - 1) % settings.every == 0;
-        if !selected || settings.fraction <= 0.0 {
-            continue;
-        }
-
-        let raw_start = tokens[units[first].start_token].start;
-        let last_letter = *letters.last().expect("word has a letter");
-        let raw_end = tokens[units[last_letter].end_token - 1].end;
-        let unsafe_control = tokens[units[first].start_token..units[last_letter].end_token]
-            .iter()
-            .any(|token| matches!(token.kind, TokenKind::Control(ControlKind::Other)));
-        if raw_end.saturating_sub(raw_start) > MAX_PENDING || unsafe_control {
-            continue;
-        }
-
-        // A selected word occupies at most MAX_PENDING bytes, so its letter count is
-        // exactly representable as f64. A validated fraction keeps the result in range.
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            reason = "the bounded word length and validated fraction make the rounded count safe"
-        )]
-        let emphasis_length = (settings.fraction * letters.len() as f64).ceil() as usize;
-        if emphasis_length == 0 {
-            continue;
-        }
-        let prefix_end = units[letters[emphasis_length.min(letters.len()) - 1]].end_token;
-        starts.insert(units[first].start_token, prefix_end);
-    }
-
-    starts
-}
-
 #[must_use]
 fn render_ansi(
     source: &[u8],
     tokens: &[Token],
     starts: &BTreeMap<usize, usize>,
     style: &mut StyleState,
+    emphasis: Emphasis,
 ) -> Vec<u8> {
     // Reserve for actual emphasized spans, rather than every character token.
     // SGR resets inside a span may still grow the buffer as required.
@@ -563,30 +707,67 @@ fn render_ansi(
     let mut emphasizing = false;
     let indexed_tokens = tokens.iter().enumerate();
     for (index, token) in indexed_tokens {
-        if let Some(event) = starts.get(&index).filter(|_| style.known) {
-            output.extend_from_slice(b"\x1b[1m");
+        if let Some(event) = starts
+            .get(&index)
+            .filter(|_| style.known && !emphasis_is_active(*style, emphasis))
+        {
+            write_emphasis_start(&mut output, emphasis);
             emphasizing = true;
             emphasis_end = Some(*event);
         }
 
         output.extend_from_slice(&source[token.start..token.end]);
         if let TokenKind::Control(ControlKind::Sgr) = token.kind {
-            let resets_intensity = sgr_resets_intensity(&source[token.start..token.end]);
+            let resets_emphasis = sgr_resets_emphasis(&source[token.start..token.end], emphasis);
             style.apply_sgr(&source[token.start..token.end]);
-            if emphasizing && resets_intensity {
-                output.extend_from_slice(b"\x1b[1m");
+            if emphasizing && resets_emphasis {
+                write_emphasis_start(&mut output, emphasis);
             }
         } else if matches!(token.kind, TokenKind::Control(ControlKind::Other)) {
             style.known = false;
         }
 
         if emphasizing && emphasis_end == Some(index + 1) {
-            restore_bold_dim(&mut output, *style);
+            restore_emphasis(&mut output, *style, emphasis);
             emphasizing = false;
             emphasis_end = None;
         }
     }
     output
+}
+
+#[must_use]
+fn emphasis_is_active(style: StyleState, emphasis: Emphasis) -> bool {
+    match emphasis {
+        Emphasis::Bold => style.bold,
+        Emphasis::Underline => style.underline.is_active(),
+        Emphasis::Reverse => style.reverse,
+    }
+}
+
+fn write_emphasis_start(output: &mut Vec<u8>, emphasis: Emphasis) {
+    let sequence: &[u8] = match emphasis {
+        Emphasis::Bold => b"\x1b[1m",
+        Emphasis::Underline => b"\x1b[4m",
+        Emphasis::Reverse => b"\x1b[7m",
+    };
+    output.extend_from_slice(sequence);
+}
+
+fn restore_emphasis(output: &mut Vec<u8>, style: StyleState, emphasis: Emphasis) {
+    match emphasis {
+        Emphasis::Bold => restore_bold_dim(output, style),
+        Emphasis::Underline => {
+            output.extend_from_slice(b"\x1b[24m");
+            style.underline.write_start(output);
+        }
+        Emphasis::Reverse => {
+            output.extend_from_slice(b"\x1b[27m");
+            if style.reverse {
+                output.extend_from_slice(b"\x1b[7m");
+            }
+        }
+    }
 }
 
 /// Transforms a complete byte slice using bionic reading emphasis.
@@ -616,6 +797,70 @@ pub fn transform(input: &[u8], settings: &Settings, enabled: bool) -> Vec<u8> {
     let mut output = transformer.push(input);
     output.extend(transformer.finish());
     output
+}
+
+/// Transforms a complete byte slice using a caller-supplied word segmenter.
+///
+/// Unlike [`Transformer`], this convenience function does not retain any state
+/// between calls. Original bytes and terminal controls are preserved in order,
+/// with only emphasis escape sequences inserted. A disabled transformer returns
+/// the original bytes unchanged. Use [`Transformer::new_with_segmenter`] for
+/// incremental streams with bounded pending input.
+///
+/// # Panics
+///
+/// Panics immediately if settings are invalid or the segmenter returns ranges
+/// that violate [`WordSegmenter`]'s range contract. Use [`Settings::validate`]
+/// for fallible validation of untrusted settings.
+#[must_use = "use the transformed bytes"]
+pub fn transform_with_segmenter(
+    input: &[u8],
+    settings: &Settings,
+    enabled: bool,
+    segmenter: &dyn WordSegmenter,
+) -> Vec<u8> {
+    settings
+        .validate()
+        .expect("transformer settings must be valid");
+    if !enabled {
+        return input.to_vec();
+    }
+
+    let (tokens, _) = scan_tokens(input, /* eof */ true);
+    let mut fixation = FixationEngine::new(settings);
+    let starts = select_emphasis(&tokens, &mut fixation, segmenter);
+    let mut style = StyleState::initial();
+    render_ansi(input, &tokens, &starts, &mut style, settings.emphasis)
+}
+
+fn select_emphasis(
+    tokens: &[Token],
+    fixation: &mut FixationEngine,
+    segmenter: &dyn WordSegmenter,
+) -> BTreeMap<usize, usize> {
+    let (visible, char_map) = visible_text(tokens);
+    let spans = fixation.spans(&visible, segmenter);
+    let mut starts = BTreeMap::new();
+
+    for span in spans {
+        let Some(token_range) = token_range_for_span(&span, &char_map) else {
+            continue;
+        };
+        if token_range.end <= token_range.start
+            || tokens[token_range.clone()]
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::Control(ControlKind::Other)))
+        {
+            continue;
+        }
+        let raw_start = tokens[token_range.start].start;
+        let raw_end = tokens[token_range.end - 1].end;
+        if raw_end.saturating_sub(raw_start) <= MAX_PENDING {
+            starts.insert(token_range.start, token_range.end);
+        }
+    }
+
+    starts
 }
 
 fn restore_bold_dim(output: &mut Vec<u8>, style: StyleState) {
@@ -862,23 +1107,38 @@ fn sgr_params(sequence: &[u8]) -> Option<Vec<SgrParam>> {
         return Some(vec![SgrParam {
             code: 0,
             colon_form: false,
+            colon_value: None,
         }]);
     }
     let mut params = Vec::new();
     let semicolon_separated_parameters = parameter_bytes.split(|byte| *byte == b';');
     for part in semicolon_separated_parameters {
-        let code_part = part.split(|byte| *byte == b':').next().unwrap_or_default();
+        let mut colon_parts = part.split(|byte| *byte == b':');
+        let code_part = colon_parts.next().unwrap_or_default();
+        let colon_form = colon_parts.next().is_some();
+        let colon_value = if colon_form {
+            let value_part = part.split(|byte| *byte == b':').nth(1).unwrap_or_default();
+            if value_part.is_empty() {
+                None
+            } else {
+                Some(str::from_utf8(value_part).ok()?.parse().ok()?)
+            }
+        } else {
+            None
+        };
         if code_part.is_empty() {
             params.push(SgrParam {
                 code: 0,
                 colon_form: false,
+                colon_value: None,
             });
         } else {
             let text = str::from_utf8(code_part).ok()?;
             let code: u16 = text.parse().ok()?;
             params.push(SgrParam {
                 code,
-                colon_form: part.contains(&b':'),
+                colon_form,
+                colon_value,
             });
         }
     }
@@ -899,7 +1159,7 @@ fn sgr_params(sequence: &[u8]) -> Option<Vec<SgrParam>> {
 }
 
 #[must_use]
-fn sgr_resets_intensity(sequence: &[u8]) -> bool {
+fn sgr_resets_emphasis(sequence: &[u8], emphasis: Emphasis) -> bool {
     let Some(params) = sgr_params(sequence) else {
         return false;
     };
@@ -914,7 +1174,17 @@ fn sgr_resets_intensity(sequence: &[u8]) -> bool {
             }
             continue;
         }
-        if !parameter.colon_form && matches!(parameter.code, 0 | 22) {
+        let resets = match emphasis {
+            Emphasis::Bold => matches!(parameter.code, 0 | 22),
+            Emphasis::Underline => {
+                matches!(parameter.code, 0 | 24)
+                    || (parameter.code == 4
+                        && parameter.colon_form
+                        && parameter.colon_value == Some(0))
+            }
+            Emphasis::Reverse => matches!(parameter.code, 0 | 27),
+        };
+        if resets && (parameter.code != 4 || parameter.colon_form) {
             return true;
         }
         index += 1;
@@ -923,9 +1193,7 @@ fn sgr_resets_intensity(sequence: &[u8]) -> bool {
 }
 
 #[must_use]
-fn graphemes(tokens: &[Token]) -> Vec<Grapheme> {
-    use unicode_segmentation::UnicodeSegmentation;
-
+fn visible_text(tokens: &[Token]) -> (String, Vec<CharMap>) {
     let mut visible = String::new();
     let mut char_map = Vec::new();
     let indexed_tokens = tokens.iter().enumerate();
@@ -953,6 +1221,27 @@ fn graphemes(tokens: &[Token]) -> Vec<Grapheme> {
         }
     }
 
+    (visible, char_map)
+}
+
+#[must_use]
+#[expect(
+    clippy::range_plus_one,
+    reason = "the result must be an end-exclusive Range for slicing token arrays"
+)]
+fn token_range_for_span(span: &Range<usize>, char_map: &[CharMap]) -> Option<Range<usize>> {
+    let first = char_map
+        .iter()
+        .find(|mapping| mapping.start <= span.start && span.start < mapping.end)?;
+    let last = char_map
+        .iter()
+        .find(|mapping| mapping.start < span.end && mapping.end >= span.end)?;
+    Some(first.token..last.token + 1)
+}
+
+#[must_use]
+fn graphemes(tokens: &[Token]) -> Vec<Grapheme> {
+    let (visible, char_map) = visible_text(tokens);
     let mut result = Vec::new();
     let mut map_index = 0;
     let grapheme_ranges = visible.grapheme_indices(true);
@@ -983,68 +1272,95 @@ fn graphemes(tokens: &[Token]) -> Vec<Grapheme> {
 
 #[must_use]
 fn classify_grapheme(value: &str) -> GraphemeKind {
-    use unicode_script::UnicodeScript;
-
     if matches!(value, "'" | "’" | "ʼ") {
         return GraphemeKind::Apostrophe;
     }
-    let Some(first) = value.chars().next() else {
-        return GraphemeKind::Other;
-    };
-    if first.is_alphabetic() && first.script() == Script::Latin {
-        if value
-            .chars()
-            .skip(1)
-            .all(|character| !character.is_alphabetic() && character.script() == Script::Inherited)
-        {
-            return GraphemeKind::LatinLetter;
-        }
-        return GraphemeKind::Other;
+    if value.chars().next().is_some_and(is_word_connector) {
+        return GraphemeKind::Connector;
     }
-    if value
-        .chars()
-        .all(|character| !character.is_alphabetic() && character.script() == Script::Inherited)
-    {
-        GraphemeKind::Mark
-    } else {
-        GraphemeKind::Other
+    if value.chars().any(char::is_alphabetic) {
+        return GraphemeKind::Letter;
     }
+    if value.chars().any(char::is_numeric) {
+        return GraphemeKind::Number;
+    }
+    GraphemeKind::Other
 }
 
 #[must_use]
 fn trailing_candidate_start(units: &[Grapheme]) -> Option<usize> {
     let last = units.len().checked_sub(1)?;
-    let mut cursor = match units[last].kind {
-        GraphemeKind::LatinLetter => last,
-        GraphemeKind::Apostrophe
-            if last > 0 && units[last - 1].kind == GraphemeKind::LatinLetter =>
-        {
-            last - 1
-        }
-        _ => return None,
-    };
+    let is_word_unit = |kind| matches!(kind, GraphemeKind::Letter | GraphemeKind::Number);
+    let is_connector = |kind| matches!(kind, GraphemeKind::Apostrophe | GraphemeKind::Connector);
+    if !is_word_unit(units[last].kind) && !is_connector(units[last].kind) {
+        return None;
+    }
 
-    loop {
-        while cursor > 0 && units[cursor - 1].kind == GraphemeKind::LatinLetter {
-            cursor -= 1;
-        }
-        if cursor >= 2
-            && units[cursor - 1].kind == GraphemeKind::Apostrophe
-            && units[cursor - 2].kind == GraphemeKind::LatinLetter
-        {
-            cursor -= 2;
-        } else {
-            break;
-        }
+    // Keep the whole contiguous possible word, including a trailing or
+    // leading connector run: ICU can resolve those connectors only after a
+    // neighboring word character arrives (for example, ExtendNumLet).
+    let mut cursor = last;
+    while cursor > 0
+        && (is_word_unit(units[cursor - 1].kind) || is_connector(units[cursor - 1].kind))
+    {
+        cursor -= 1;
     }
     Some(units[cursor].start_token)
+}
+
+#[must_use]
+fn trailing_segmenter_candidate(tokens: &[Token], segmenter: &dyn WordSegmenter) -> Option<usize> {
+    let (visible, char_map) = visible_text(tokens);
+    let start = segmenter.terminal_trailing_word_start(&visible)?;
+    char_map
+        .iter()
+        .find(|mapping| mapping.start <= start && start < mapping.end)
+        .map(|mapping| mapping.token)
+}
+
+fn segmenter_trailing_start(segmenter: &dyn WordSegmenter, text: &str) -> Option<usize> {
+    let start = segmenter.terminal_trailing_word_start(text)?;
+    assert!(
+        start < text.len()
+            && text.is_char_boundary(start)
+            && text
+                .grapheme_indices(true)
+                .any(|(boundary, _)| boundary == start),
+        "word segmenter returned a trailing start that splits a character or grapheme"
+    );
+    Some(start)
+}
+
+fn trailing_grapheme_candidate_start(text: &str) -> Option<usize> {
+    let units: Vec<(usize, GraphemeKind)> = text
+        .grapheme_indices(true)
+        .map(|(start, grapheme)| (start, classify_grapheme(grapheme)))
+        .collect();
+    let last = units.len().checked_sub(1)?;
+    let is_word_unit = |kind| matches!(kind, GraphemeKind::Letter | GraphemeKind::Number);
+    let is_connector = |kind| matches!(kind, GraphemeKind::Apostrophe | GraphemeKind::Connector);
+    if !is_word_unit(units[last].1) && !is_connector(units[last].1) {
+        return None;
+    }
+
+    let mut cursor = last;
+    while cursor > 0 && (is_word_unit(units[cursor - 1].1) || is_connector(units[cursor - 1].1)) {
+        cursor -= 1;
+    }
+    Some(units[cursor].0)
+}
+
+fn letter_grapheme_count(text: &str) -> usize {
+    text.graphemes(true)
+        .filter(|grapheme| grapheme.chars().any(char::is_alphabetic))
+        .count()
 }
 
 #[must_use]
 fn chunk_can_extend_word(input: &[u8]) -> bool {
     if input
         .iter()
-        .all(|byte| byte.is_ascii_alphabetic() || *byte == b'\'')
+        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'\'')
     {
         return true;
     }
@@ -1058,7 +1374,10 @@ fn chunk_can_extend_word(input: &[u8]) -> bool {
     graphemes(&tokens).iter().all(|unit| {
         matches!(
             unit.kind,
-            GraphemeKind::LatinLetter | GraphemeKind::Apostrophe | GraphemeKind::Mark
+            GraphemeKind::Letter
+                | GraphemeKind::Number
+                | GraphemeKind::Apostrophe
+                | GraphemeKind::Connector
         )
     })
 }
@@ -1154,6 +1473,69 @@ fn drain_mode_complete(mode: &mut DrainMode, byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
+    use proptest::prelude::{Just, ProptestConfig, prop_oneof};
+    use proptest::{prop_assert_eq, proptest};
+
+    use crate::segmentation::WordSegmenter;
+    use crate::settings::{Emphasis, LengthRule};
+
+    use super::{MAX_PENDING, Transformer};
+    use crate::settings::Settings;
+
+    #[derive(Clone, Copy, Debug)]
+    struct SplitAfterTwo;
+
+    impl WordSegmenter for SplitAfterTwo {
+        fn word_ranges(&self, text: &str) -> Vec<Range<usize>> {
+            if text == "abcdef!" {
+                vec![0..2, 2..6]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct AlphabeticRuns;
+
+    impl WordSegmenter for AlphabeticRuns {
+        fn word_ranges(&self, text: &str) -> Vec<Range<usize>> {
+            let mut ranges = Vec::new();
+            let mut start = None;
+            let mut end = 0;
+            for (offset, character) in text.char_indices() {
+                if character.is_alphabetic() {
+                    start.get_or_insert(offset);
+                    end = offset + character.len_utf8();
+                } else if let Some(range_start) = start.take() {
+                    ranges.push(range_start..end);
+                }
+            }
+            if let Some(range_start) = start {
+                ranges.push(range_start..end);
+            }
+            ranges
+        }
+    }
+
+    fn strip_emphasis(input: &[u8]) -> Vec<u8> {
+        let mut output = Vec::with_capacity(input.len());
+        let mut cursor = 0;
+        while cursor < input.len() {
+            if input[cursor..].starts_with(b"\x1b[1m") {
+                cursor += 4;
+            } else if input[cursor..].starts_with(b"\x1b[22m") {
+                cursor += 5;
+            } else {
+                output.push(input[cursor]);
+                cursor += 1;
+            }
+        }
+        output
+    }
+
     #[test]
     fn invalid_settings_are_rejected_before_processing_input() {
         let invalid = [
@@ -1195,9 +1577,6 @@ mod tests {
         );
     }
 
-    use super::{MAX_PENDING, Transformer};
-    use crate::settings::Settings;
-
     #[test]
     fn configuration_changes_apply_only_to_a_new_transformer() {
         let mut settings = Settings::default();
@@ -1210,6 +1589,35 @@ mod tests {
         assert_eq!(
             super::transform(b"reading", &settings, /* enabled */ true),
             b"\x1b[1mreading\x1b[22m"
+        );
+    }
+
+    #[test]
+    fn custom_word_segmenter_drives_ansi_fixation_boundaries() {
+        let segmenter = SplitAfterTwo;
+        let mut transformer =
+            Transformer::new_with_segmenter(&Settings::default(), true, Box::new(segmenter));
+        let mut actual = transformer.push(b"abcdef!");
+        actual.extend(transformer.finish());
+        assert_eq!(actual, b"\x1b[1ma\x1b[22mb\x1b[1mcd\x1b[22mef!");
+
+        for width in 1..=b"abcdef!".len() {
+            let mut transformer =
+                Transformer::new_with_segmenter(&Settings::default(), true, Box::new(segmenter));
+            let mut output = Vec::new();
+            for chunk in b"abcdef!".chunks(width) {
+                output.extend(transformer.push(chunk));
+            }
+            output.extend(transformer.finish());
+            assert_eq!(
+                output, b"\x1b[1ma\x1b[22mb\x1b[1mcd\x1b[22mef!",
+                "width={width}"
+            );
+        }
+
+        assert_eq!(
+            super::transform_with_segmenter(b"abcdef!", &Settings::default(), true, &segmenter),
+            b"\x1b[1ma\x1b[22mb\x1b[1mcd\x1b[22mef!"
         );
     }
 
@@ -1285,6 +1693,46 @@ mod tests {
             actual.extend(renderer.finish());
             assert_eq!(actual, expected, "width={width}");
         }
+    }
+
+    #[test]
+    fn timed_flush_counts_each_completed_custom_segmenter_range() {
+        let settings = Settings {
+            every: 2,
+            ..Settings::default()
+        };
+        let mut renderer =
+            Transformer::new_with_segmenter(&settings, true, Box::new(AlphabeticRuns));
+        assert!(renderer.push(b"aa_bb").is_empty());
+        let mut actual = renderer.flush_pending();
+        actual.extend(renderer.push(b"! cc dd "));
+        actual.extend(renderer.finish());
+
+        assert_eq!(actual, b"aa_bb! \x1b[1mc\x1b[22mc dd ");
+    }
+
+    #[test]
+    fn overflow_counts_each_completed_custom_segmenter_range() {
+        let settings = Settings {
+            every: 2,
+            ..Settings::default()
+        };
+        let mut oversized = Vec::with_capacity(MAX_PENDING);
+        for _ in 0..(MAX_PENDING - 1) / 3 {
+            oversized.extend_from_slice(b"aa_");
+        }
+        oversized.push(b'a');
+        assert_eq!(oversized.len(), MAX_PENDING);
+
+        let mut renderer =
+            Transformer::new_with_segmenter(&settings, true, Box::new(AlphabeticRuns));
+        let mut actual = renderer.push(&oversized);
+        actual.extend(renderer.push(b"a! bb cc dd "));
+        actual.extend(renderer.finish());
+
+        let mut expected = oversized;
+        expected.extend_from_slice(b"a! \x1b[1mb\x1b[22mb cc \x1b[1md\x1b[22md ");
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -1383,6 +1831,23 @@ mod tests {
             actual,
             b"\xc3\x9b\x1b[1mnic\x1b[22mode \x1b[1mread\x1b[22ming "
         );
+    }
+
+    #[test]
+    fn flushing_incomplete_bytes_does_not_end_a_timed_out_word() {
+        let settings = Settings {
+            every: 2,
+            ..Settings::default()
+        };
+        let mut transformer = Transformer::new(&settings, true);
+        assert!(transformer.push(b"alpha").is_empty());
+        let mut actual = transformer.flush_pending();
+        assert!(transformer.push(&[0xc3]).is_empty());
+        actual.extend(transformer.flush_pending());
+        actual.extend(transformer.push(b"\xff beta gamma "));
+        actual.extend(transformer.finish());
+
+        assert_eq!(actual, b"alpha\xc3\xff beta \x1b[1mgam\x1b[22mma ");
     }
 
     #[test]
@@ -1508,11 +1973,287 @@ mod tests {
     }
 
     #[test]
-    fn decomposed_latin_marks_count_once_and_other_scripts_stay_unchanged() {
+    fn decomposed_marks_count_once_and_unicode_scripts_are_emphasized() {
         let input = "cafe\u{301} Καλημέρα 123 😀".as_bytes();
         assert_eq!(
             super::transform(input, &Settings::default(), true),
-            "\x1b[1mca\x1b[22mfe\u{301} Καλημέρα 123 😀".as_bytes()
+            "\x1b[1mca\x1b[22mfe\u{301} \x1b[1mΚαλη\x1b[22mμέρα 123 😀".as_bytes()
+        );
+    }
+
+    #[test]
+    fn unicode_words_preserve_text_and_keep_emoji_graphemes_unstyled() {
+        let settings = Settings {
+            min_word_length: 1,
+            ..Settings::default()
+        };
+        let samples = [
+            "café",
+            "cafe\u{301}",
+            "niño",
+            "don't",
+            "hyphen-ated",
+            "你好世界",
+            "日本語",
+            "مرحبا",
+            "Привет",
+            "ภาษาไทย",
+        ];
+
+        for text in samples {
+            let output = super::transform(text.as_bytes(), &settings, true);
+            assert_eq!(strip_emphasis(&output), text.as_bytes(), "{text}");
+            assert!(
+                output.windows(4).any(|window| window == b"\x1b[1m"),
+                "{text}"
+            );
+        }
+
+        let family = "👨‍👩‍👧‍👦";
+        assert_eq!(
+            super::transform(family.as_bytes(), &settings, true),
+            family.as_bytes()
+        );
+    }
+
+    #[test]
+    fn marked_midnumlet_connector_stays_chunk_invariant() {
+        let input = "𐁐.\u{11d3a}A".as_bytes();
+        let settings = Settings::default();
+        let expected = super::transform(input, &settings, true);
+
+        for width in 1..=input.len() {
+            let mut transformer = Transformer::new(&settings, true);
+            let mut actual = Vec::new();
+            for chunk in input.chunks(width) {
+                actual.extend(transformer.push(chunk));
+            }
+            actual.extend(transformer.finish());
+            assert_eq!(actual, expected, "width={width}");
+        }
+    }
+
+    #[test]
+    fn unicode_chunk_boundaries_do_not_change_emphasis_or_bytes() {
+        let input = "café cafe\u{301} don't hyphen-ated 你好世界 日本語 مرحبا Привет ภาษาไทย 👨‍👩‍👧‍👦";
+        let bytes = input.as_bytes();
+        let settings = Settings {
+            min_word_length: 1,
+            ..Settings::default()
+        };
+        let expected = super::transform(bytes, &settings, true);
+
+        for split in 0..=bytes.len() {
+            let mut transformer = Transformer::new(&settings, true);
+            let mut output = transformer.push(&bytes[..split]);
+            output.extend(transformer.push(&bytes[split..]));
+            output.extend(transformer.finish());
+            assert_eq!(output, expected, "split at byte {split}");
+        }
+
+        let mut transformer = Transformer::new(&settings, true);
+        let mut output = Vec::new();
+        for byte in bytes {
+            output.extend(transformer.push(std::slice::from_ref(byte)));
+        }
+        output.extend(transformer.finish());
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn icu_word_with_underscore_and_combining_marks_is_chunk_invariant() {
+        let input = b"~~\xde\xaa_\xcd\xaa\xde\xaa_\xcd\xaa";
+        let settings = Settings {
+            min_word_length: 1,
+            ..Settings::default()
+        };
+        let expected = super::transform(input, &settings, true);
+        assert_eq!(strip_emphasis(&expected), input);
+
+        for split in 0..=input.len() {
+            let mut transformer = Transformer::new(&settings, true);
+            let mut output = transformer.push(&input[..split]);
+            output.extend(transformer.push(&input[split..]));
+            output.extend(transformer.finish());
+            assert_eq!(output, expected, "split at byte {split}");
+        }
+
+        let mut transformer = Transformer::new(&settings, true);
+        let mut output = Vec::new();
+        for byte in input {
+            output.extend(transformer.push(std::slice::from_ref(byte)));
+        }
+        output.extend(transformer.finish());
+        assert_eq!(output, expected, "one-byte chunks");
+    }
+
+    #[test]
+    fn midletter_connectors_are_held_until_the_right_word_boundary() {
+        let input = "alpha:βeta!".as_bytes();
+        let settings = Settings {
+            min_word_length: 1,
+            ..Settings::default()
+        };
+        let expected = super::transform(input, &settings, true);
+
+        for split in 0..=input.len() {
+            let mut transformer = Transformer::new(&settings, true);
+            let mut output = transformer.push(&input[..split]);
+            output.extend(transformer.push(&input[split..]));
+            output.extend(transformer.finish());
+            assert_eq!(output, expected, "split at byte {split}");
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn unicode_word_connector_streams_match_whole_input(
+            leading in proptest::collection::vec(prop_oneof![Just('~'), Just('_')], 1..3),
+            prefix in proptest::collection::vec(prop_oneof![Just('a'), Just('β'), Just('\u{07aa}')], 1..5),
+            connector in prop_oneof![Just('_'), Just(':'), Just('\u{00b7}'), Just('~')],
+            suffix in proptest::collection::vec(prop_oneof![Just('b'), Just('γ'), Just('\u{07ab}')], 1..5),
+        ) {
+            let text: String = leading
+                .into_iter()
+                .chain(prefix)
+                .chain(std::iter::once(connector))
+                .chain(suffix)
+                .chain(std::iter::once('!'))
+                .collect();
+            let input = text.as_bytes();
+            let settings = Settings {
+                min_word_length: 1,
+                ..Settings::default()
+            };
+            let expected = super::transform(input, &settings, true);
+
+            for split in 0..=input.len() {
+                let mut transformer = Transformer::new(&settings, true);
+                let mut output = transformer.push(&input[..split]);
+                output.extend(transformer.push(&input[split..]));
+                output.extend(transformer.finish());
+                prop_assert_eq!(
+                    output,
+                    expected.clone(),
+                    "split={}, text={:?}",
+                    split,
+                    text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn configured_emphasis_styles_restore_the_input_state_and_are_idempotent() {
+        let cases = [
+            (
+                Emphasis::Bold,
+                b"\x1b[1m".as_slice(),
+                b"\x1b[22m".as_slice(),
+            ),
+            (
+                Emphasis::Underline,
+                b"\x1b[4m".as_slice(),
+                b"\x1b[24m".as_slice(),
+            ),
+            (
+                Emphasis::Reverse,
+                b"\x1b[7m".as_slice(),
+                b"\x1b[27m".as_slice(),
+            ),
+        ];
+
+        for (emphasis, start, end) in cases {
+            let settings = Settings {
+                emphasis,
+                ..Settings::default()
+            };
+            let mut expected = start.to_vec();
+            expected.extend_from_slice(b"read");
+            expected.extend_from_slice(end);
+            expected.extend_from_slice(b"ing!");
+            let first = super::transform(b"reading!", &settings, true);
+            assert_eq!(first, expected);
+            assert_eq!(super::transform(&first, &settings, true), first);
+
+            let input_with_existing_style = match emphasis {
+                Emphasis::Bold => b"\x1b[1mreading\x1b[22m next".as_slice(),
+                Emphasis::Underline => b"\x1b[4mreading\x1b[24m next".as_slice(),
+                Emphasis::Reverse => b"\x1b[7mreading\x1b[27m next".as_slice(),
+            };
+            let styled = super::transform(input_with_existing_style, &settings, true);
+            let prefix_length = input_with_existing_style.len() - b"next".len();
+            let mut expected_styled = input_with_existing_style[..prefix_length].to_vec();
+            expected_styled.extend_from_slice(start);
+            expected_styled.extend_from_slice(b"ne");
+            expected_styled.extend_from_slice(end);
+            expected_styled.extend_from_slice(b"xt");
+            assert_eq!(styled, expected_styled);
+            assert_eq!(super::transform(&styled, &settings, true), styled);
+        }
+    }
+
+    #[test]
+    fn colon_form_underline_reset_allows_emphasis_to_start() {
+        let settings = Settings {
+            emphasis: Emphasis::Underline,
+            ..Settings::default()
+        };
+        assert_eq!(
+            super::transform(b"\x1b[4:0mreading!", &settings, true),
+            b"\x1b[4:0m\x1b[4mread\x1b[24ming!"
+        );
+        let first = super::transform(b"\x1b[4:0mreading!", &settings, true);
+        assert_eq!(super::transform(&first, &settings, true), first);
+    }
+
+    #[test]
+    fn underline_variants_are_restored_after_the_emphasized_prefix() {
+        let settings = Settings {
+            emphasis: Emphasis::Underline,
+            ..Settings::default()
+        };
+        for (source_style, restored_style) in [
+            (b"\x1b[4:2m".as_slice(), b"\x1b[4:2m".as_slice()),
+            (b"\x1b[4:3m".as_slice(), b"\x1b[4:3m".as_slice()),
+            (b"\x1b[21m".as_slice(), b"\x1b[21m".as_slice()),
+        ] {
+            let mut input = b"reading".to_vec();
+            input.splice(2..2, source_style.iter().copied());
+            input.push(b'!');
+
+            let mut expected = b"\x1b[4mre".to_vec();
+            expected.extend_from_slice(source_style);
+            expected.extend_from_slice(b"ad");
+            expected.extend_from_slice(b"\x1b[24m");
+            expected.extend_from_slice(restored_style);
+            expected.extend_from_slice(b"ing!");
+            let first = super::transform(&input, &settings, true);
+            assert_eq!(first, expected);
+            assert_eq!(super::transform(&first, &settings, true), first);
+        }
+    }
+
+    #[test]
+    fn length_rules_choose_fraction_by_letter_grapheme_count() {
+        let settings = Settings {
+            length_rules: vec![
+                LengthRule {
+                    max_length: 3,
+                    fraction: 1.0,
+                },
+                LengthRule {
+                    max_length: 5,
+                    fraction: 0.25,
+                },
+            ],
+            ..Settings::default()
+        };
+        assert_eq!(
+            super::transform(b"cat birds elephant", &settings, true),
+            b"\x1b[1mcat\x1b[22m \x1b[1mbi\x1b[22mrds \x1b[1melep\x1b[22mhant"
         );
     }
 
@@ -1578,5 +2319,74 @@ mod tests {
         }
         output.extend(transformer.finish());
         assert_eq!(output, expected);
+    }
+    #[test]
+    fn all_underline_styles_survive_temporary_bold_emphasis() {
+        for code in ["4", "21", "4:1", "4:2", "4:3", "4:4", "4:5", "4:9"] {
+            let source = format!("\x1b[{code}mreading\x1b[0m");
+            let settings = crate::settings::Settings::new();
+            let output = super::transform(source.as_bytes(), &settings, true);
+            assert_eq!(strip_emphasis(&output), source.as_bytes(), "{code}");
+            assert!(output.windows(4).any(|part| part == b"read"));
+        }
+    }
+
+    #[test]
+    fn invalid_and_extended_sgr_parameters_never_corrupt_following_text() {
+        for parameters in [
+            "?",
+            "999999",
+            "38",
+            "38;3",
+            "38;5",
+            "38;2;0",
+            "4:",
+            "4:999999",
+            ";;",
+            "38:2::1:2:3",
+            "48;5;10",
+            "58;2;1;2;3",
+        ] {
+            let source = format!("\x1b[{parameters}mreading\x1b[0m next");
+            let output = super::transform(source.as_bytes(), &Settings::new(), true);
+            let mut filter = crate::document::ControlFilter::plain_text();
+            let mut visible = filter.push(&output);
+            visible.extend(filter.finish());
+            assert_eq!(visible, b"reading next", "{parameters}");
+            let mut renderer = super::Transformer::new(&Settings::new(), true);
+            let mut chunked = Vec::new();
+            for byte in source.as_bytes() {
+                chunked.extend(renderer.push(std::slice::from_ref(byte)));
+            }
+            chunked.extend(renderer.finish());
+            assert_eq!(chunked, output, "{parameters}");
+        }
+    }
+
+    #[test]
+    fn timed_out_and_oversized_string_controls_preserve_bytes_and_resume_at_terminators() {
+        for prefix in [b"\x1b]".as_slice(), b"\x1bP", b"\x1bX", b"\x1b^", b"\x1b_"] {
+            let mut renderer = super::Transformer::new(&Settings::new(), true);
+            let mut source = prefix.to_vec();
+            source.extend(std::iter::repeat_n(b'x', super::MAX_PENDING + 5));
+            source.extend_from_slice(b"\x1b\\\x1b[0mreading");
+            let expected = super::transform(&source, &Settings::new(), true);
+            let mut output = Vec::new();
+            for chunk in source.chunks(127) {
+                output.extend(renderer.push(chunk));
+            }
+            output.extend(renderer.finish());
+            assert_eq!(output, expected, "{prefix:?}");
+            assert!(output.starts_with(prefix));
+            let mut renderer = super::Transformer::new(&Settings::new(), true);
+            let mut output = renderer.push(prefix);
+            output.extend(renderer.flush_pending());
+            output.extend(renderer.push(b"payload\x1b"));
+            output.extend(renderer.push(b"\\\x1b[0mreading"));
+            output.extend(renderer.finish());
+            let mut original = prefix.to_vec();
+            original.extend_from_slice(b"payload\x1b\\\x1b[0mreading");
+            assert_eq!(strip_emphasis(&output), original);
+        }
     }
 }
