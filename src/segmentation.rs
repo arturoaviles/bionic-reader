@@ -90,12 +90,9 @@ impl WordSegmenter for UnicodeSegmenter {
             .chain(std::iter::once(text.len()))
             .collect();
         let mut ranges: Vec<Range<usize>> = Vec::new();
-        let mut boundaries = self.segmenter.segment_str(text);
-        let Some(mut start) = boundaries.next() else {
-            return ranges;
-        };
-
-        for end in boundaries {
+        // ICU segmentation always begins with the start-of-text boundary at zero.
+        let mut start = 0;
+        for end in self.segmenter.segment_str(text).skip(1) {
             let range = start..end;
             if text[range].chars().any(char::is_alphabetic) {
                 let aligned = grapheme_floor(&grapheme_boundaries, start)
@@ -347,10 +344,7 @@ impl FixationEngine {
                     reason = "the bounded letter count and validated fraction make this safe"
                 )]
                 let emphasized_letters = (fraction * letter_count as f64).ceil() as usize;
-                if emphasized_letters == 0 {
-                    continue;
-                }
-
+                // A positive fraction and a nonempty letter run round up to at least one.
                 let end = letter_run.letters[emphasized_letters.min(letter_count) - 1].end;
                 spans.push(letter_run.start..end);
             }
@@ -613,10 +607,40 @@ mod tests {
             let outcome = std::panic::catch_unwind(|| {
                 FixationEngine::new(&Settings::new()).spans(text, &InvalidSegmenter(ranges))
             });
+            outcome.expect_err("invalid custom segmentation must fail before rendering");
+        }
+    }
+    #[test]
+    fn zero_fixation_rules_leave_selected_words_unemphasized() {
+        for settings in [
+            Settings {
+                fraction: 0.0,
+                ..Settings::new()
+            },
+            Settings {
+                length_rules: vec![crate::settings::LengthRule {
+                    max_length: 10,
+                    fraction: 0.0,
+                }],
+                ..Settings::new()
+            },
+        ] {
             assert!(
-                outcome.is_err(),
-                "invalid segmenter must be rejected for {text:?}"
+                FixationEngine::new(&settings)
+                    .spans("reading words", &UnicodeSegmenter::new())
+                    .is_empty()
             );
         }
+    }
+    #[test]
+    fn incremental_fixation_rejects_a_boundary_inside_a_grapheme() {
+        let outcome = std::panic::catch_unwind(|| {
+            FixationEngine::new(&Settings::new()).advance_ranges_before(
+                "a\u{301}",
+                std::slice::from_ref(&(0..3)),
+                1,
+            );
+        });
+        outcome.expect_err("incremental segmentation must preserve grapheme boundaries");
     }
 }

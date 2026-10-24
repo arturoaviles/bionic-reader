@@ -178,6 +178,51 @@ fn preview_print_uses_the_requested_passage() {
     assert_eq!(output.stdout, b"A small preview passage.");
 }
 
+#[test]
+fn interactive_preview_opens_the_sample_and_restores_terminal_state() {
+    let home = tempfile::tempdir().expect("create preview home");
+    let path = home.path().join("unused");
+    let mut terminal = Terminal::start_mode(home, &path, false, false, "preview");
+    terminal.expect_text(b"Reading complex documentation");
+    terminal.send(b"q");
+    assert_eq!(terminal.wait(), 0);
+    assert!(has_terminal_restoration_marker(&terminal.output));
+}
+
+#[test]
+fn interactive_input_shows_help_and_missing_reader_input_fails_without_waiting() {
+    for (mode, expected, status) in [
+        ("help", "Usage:", 0),
+        (
+            "read-missing",
+            "supply a file or pipe document text into read",
+            2,
+        ),
+    ] {
+        let home = tempfile::tempdir().expect("create interactive CLI home");
+        let path = home.path().join("unused");
+        let mut terminal = Terminal::start_mode(home, &path, false, false, mode);
+        terminal.expect_text(expected.as_bytes());
+        assert_eq!(terminal.wait(), status);
+        assert!(has_terminal_restoration_marker(&terminal.output));
+    }
+}
+
+fn receive_terminal_output(
+    mut reader: Box<dyn Read + Send>,
+) -> (mpsc::Receiver<Vec<u8>>, JoinHandle<()>) {
+    let (sender, receiver) = mpsc::channel();
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    (receiver, reader_thread)
+}
+
 fn has_terminal_restoration_marker(output: &[u8]) -> bool {
     strip_terminal_controls(output)
         .windows(b"TERMIO_RESTORED".len())
@@ -198,6 +243,16 @@ struct Terminal {
 
 impl Terminal {
     fn start(home: TempDir, path: &Path, stdin_document: bool, background_reader: bool) -> Self {
+        Self::start_mode(home, path, stdin_document, background_reader, "read")
+    }
+
+    fn start_mode(
+        home: TempDir,
+        path: &Path,
+        stdin_document: bool,
+        background_reader: bool,
+        mode: &str,
+    ) -> Self {
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize {
                 rows: 8,
@@ -211,7 +266,14 @@ impl Terminal {
             "-c",
             r#"
                 before=$(stty -g < /dev/tty)
-                if [ "$BIONIC_READER_TEST_BACKGROUND" = 1 ]; then
+                if [ "$BIONIC_READER_TEST_MODE" != read ]; then
+                    case "$BIONIC_READER_TEST_MODE" in
+                        preview) "$BIONIC_READER_TEST_BIN" --style always preview ;;
+                        help) "$BIONIC_READER_TEST_BIN" ;;
+                        read-missing) "$BIONIC_READER_TEST_BIN" read ;;
+                    esac
+                    status=$?
+                elif [ "$BIONIC_READER_TEST_BACKGROUND" = 1 ]; then
                     "$BIONIC_READER_TEST_BIN" --style always read "$BIONIC_READER_TEST_DOC" &
                     reader_pid=$!
                     printf '%s\n' "$reader_pid" > "$BIONIC_READER_TEST_PID_FILE"
@@ -252,6 +314,7 @@ impl Terminal {
         );
         command.env("BIONIC_READER_TEST_PID_FILE", &reader_pid_file);
         command.env("HOME", home.path());
+        command.env("BIONIC_READER_TEST_MODE", mode);
         command.env("TERM", "xterm-256color");
         command.env_remove("XDG_CONFIG_HOME");
         for name in [
@@ -268,7 +331,7 @@ impl Terminal {
             .expect("start the reader in the pseudo-terminal");
         drop(pair.slave);
 
-        let mut reader = pair
+        let reader = pair
             .master
             .try_clone_reader()
             .expect("clone the pseudo-terminal reader");
@@ -276,15 +339,7 @@ impl Terminal {
             .master
             .take_writer()
             .expect("take the pseudo-terminal writer");
-        let (sender, receiver) = mpsc::channel();
-        let reader_thread = thread::spawn(move || {
-            let mut buffer = [0_u8; 4096];
-            while let Ok(count) = reader.read(&mut buffer) {
-                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
-                    break;
-                }
-            }
-        });
+        let (receiver, reader_thread) = receive_terminal_output(reader);
 
         Self {
             child,

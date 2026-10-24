@@ -140,3 +140,17 @@ fn user_errors_keep_stdout_empty_and_explain_the_failure() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("UTF-8"));
     }
 }
+
+#[test]
+fn explicit_text_works_when_home_and_config_environment_are_absent() {
+    let home = tempfile::tempdir().expect("create isolated process directory");
+    let output = command(home.path())
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["--style", "never", "-t", "reading"])
+        .output()
+        .expect("run without user configuration paths");
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, b"reading");
+    assert!(output.stderr.is_empty());
+}
