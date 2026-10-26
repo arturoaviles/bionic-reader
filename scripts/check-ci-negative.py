@@ -93,9 +93,13 @@ def main() -> None:
         forbidden = root / "forbidden"
         crate(forbidden, "license-fixture", "GPL-3.0-only")
         reject(deny + ["check", "licenses"], "rejected", forbidden)
-        next_fuzzer = root / "next-fuzzer"
-        crate(next_fuzzer, "libfuzzer-sys", "NCSA", version="0.4.11")
-        reject(deny + ["check", "licenses"], "rejected", next_fuzzer)
+        for version in ("0.4.10", "0.4.11", "0.4.14"):
+            other_fuzzer = root / f"fuzzer-{version}"
+            crate(other_fuzzer, "libfuzzer-sys", "NCSA", version=version)
+            reject(deny + ["check", "licenses"], "rejected", other_fuzzer)
+        other_ncsa = root / "other-ncsa"
+        crate(other_ncsa, "license-fixture", "NCSA", version="0.4.13")
+        reject(deny + ["check", "licenses"], "rejected", other_ncsa)
         wildcard = root / "wildcard"
         # Use the already fetched application dependency without network access.
         crate(wildcard, "wildcard-fixture", "MIT", 'libc = "*"')

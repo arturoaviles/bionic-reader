@@ -47,7 +47,8 @@ pinned, script-disabled Corepack bootstrap. It does not suppress other findings.
 
 `make ci-negative-check` checks that real tools reject broken anchors, duplicate
 YAML keys, workflow expression injection, an unapproved license and a Git source.
-It also proves that the NCSA exception does not extend to libfuzzer-sys 0.4.11.
+It also proves that the NCSA exception does not extend to libfuzzer-sys 0.4.10,
+0.4.11 or 0.4.14, or to an unrelated crate at the approved version.
 Unit tests exercise altered/incomplete checksum manifests and failed/skipped CI.
 
 ## Dependency policy and caches
@@ -57,8 +58,9 @@ including dev and build dependencies, across all six supported targets. The allo
 list is MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause,
 ISC, Unicode-3.0 and Zlib. Unlicensed crates and unsatisfied expressions fail.
 The user approved one exception on 2026-10-26: NCSA for exactly libfuzzer-sys
-0.4.10 in the fuzz toolchain. Registry wildcards, Git sources and unexpected
-registries fail; first-party path requirements are permitted. Duplicate versions
+0.4.13 in the fuzz toolchain, replacing the earlier 0.4.10 exception. Registry
+wildcards, Git sources and unexpected registries fail; first-party path
+requirements are permitted. Duplicate versions
 remain warnings. Dependency Review checks all scopes from low severity upward;
 its independent license check is disabled. The repository dependency graph was
 confirmed available through its SBOM API before rollout.

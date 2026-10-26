@@ -20,7 +20,7 @@ private = { ignore = false }
 # Approved 2026-10-26: the pinned fuzz runtime declares an additional NCSA
 # requirement. This exception applies to this exact tool-only crate version;
 # NCSA remains prohibited for every other package and future version.
-exceptions = [{ crate = "libfuzzer-sys@=0.4.10", allow = ["NCSA"] }]
+exceptions = [{ crate = "libfuzzer-sys@=0.4.13", allow = ["NCSA"] }]
 
 [bans]
 multiple-versions = "warn"
