@@ -66,9 +66,21 @@ esac
 }
 
 temporary=$(mktemp -d)
-trap 'rm -rf "$temporary"' EXIT
+registry_pid=
+cleanup_packages() {
+  if [[ -n $registry_pid ]]; then
+    kill "$registry_pid" 2>/dev/null || true
+    wait "$registry_pid" 2>/dev/null || true
+  fi
+  rm -rf "$temporary"
+}
+trap cleanup_packages EXIT
+# Guard empty-array expansion below for macOS Bash 3.2 with nounset.
+offline_args=(--offline)
 export npm_config_cache="$temporary/npm-cache"
 export COREPACK_HOME="$temporary/corepack-cache"
+export XDG_CACHE_HOME="$temporary/tool-cache"
+export XDG_DATA_HOME="$temporary/tool-data"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 mkdir -p "$temporary/shims" "$temporary/artifacts" "$temporary/packages"
 "$corepack_bin" enable --install-directory "$temporary/shims"
@@ -88,6 +100,54 @@ python3 scripts/create_archive.py \
   --output "$archive" \
   --root "$repo_root"
 
+if [[ ${NODE_PACKAGE_MODE:-local} == standalone ]]; then
+  python3 scripts/package-release-node.py "$archive" --output "$temporary/packages"
+  base_tarball="$temporary/packages/bionic-reader-v$version-$rust_host.npm.tgz"
+elif [[ ${NODE_PACKAGE_MODE:-local} == registry ]]; then
+  # Host binaries in foreign-target fixtures are never executed: metadata must
+  # select only the actual host dependency. Real target builds are tested separately.
+  python3 - "$archive" "$temporary" "$version" <<'PYREGISTRY'
+import json, runpy, sys
+from pathlib import Path
+root = Path.cwd()
+archive, temporary, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+standalone = runpy.run_path(str(root / "scripts/package-release-node.py"))
+registry = runpy.run_path(str(root / "scripts/package-registries.py"))
+host = registry["read_package"](standalone["package"](archive, temporary / "standalone"))
+for target, (system, cpu, libc) in registry["TARGETS"].items():
+    files = dict(host)
+    manifest = json.loads(files["package.json"][0])
+    manifest["os"], manifest["cpu"] = [system], [cpu]
+    if libc:
+        manifest["libc"] = [libc]
+    else:
+        manifest.pop("libc", None)
+    files["package.json"] = (json.dumps(manifest).encode(), 0o644)
+    registry["write_package"](temporary / "standalone" / f"bionic-reader-v{version}-{target}.npm.tgz", files)
+output = temporary / "registry"
+registry["registry_packages"](temporary / "standalone", output, version)
+base_path = output / f"bionic-reader-npm-base-v{version}.tgz"
+base = registry["read_package"](base_path)
+manifest = json.loads(base["package.json"][0])
+PYREGISTRY
+  base_tarball="$temporary/registry/bionic-reader-npm-base-v$version.tgz"
+  python3 scripts/tests/registry_server.py "$temporary/registry" "$temporary/registry-port" &
+  registry_pid=$!
+  for _ in {1..50}; do
+    [[ ! -s $temporary/registry-port ]] || break
+    kill -0 "$registry_pid" 2>/dev/null || exit 1
+    sleep 0.1
+  done
+  [[ -s $temporary/registry-port ]]
+  registry_port=$(cat "$temporary/registry-port")
+  # Bootstrap the pinned package-manager binary before restricting package
+  # resolution to the loopback fixture. pnpm 12 fetches a native tool binary.
+  mkdir -p "$temporary/pnpm-bootstrap"
+  printf '%s\n' '{"packageManager":"pnpm@12.14.0"}' > "$temporary/pnpm-bootstrap/package.json"
+  (cd "$temporary/pnpm-bootstrap" && npm_config_registry=https://registry.npmjs.org pnpm --version)
+  export npm_config_registry="http://127.0.0.1:$registry_port"
+  offline_args=()
+else
 # Exercise the same public local-pack path documented for repository builds.
 scripts/package-npm.sh --local "$temporary/artifacts" "$temporary/packages"
 base_tarball="$temporary/packages/bionic-reader-base-v$version.tgz"
@@ -149,6 +209,8 @@ with tarfile.open(native_path, "r:gz") as archive:
         raise SystemExit("local npm native tarball has the wrong operating-system restriction")
 print("Local npm tarballs contain the wrapper, host executable, and all completion/integration assets")
 PY
+
+fi
 
 make_fixture() {
   local directory=$1
@@ -274,7 +336,7 @@ mkdir -p "$npm_global_prefix" "$npm_global_work"
   printf 'Temporary npm global prefix must be user-writable: %s\n' "$npm_global_prefix" >&2
   exit 1
 }
-npm install --global --prefix "$npm_global_prefix" --offline --ignore-scripts \
+npm install --global --prefix "$npm_global_prefix" ${offline_args[@]+"${offline_args[@]}"} --ignore-scripts \
   --no-audit --no-fund "$base_tarball"
 [[ -x $npm_global_prefix/bin/bionic-reader ]] || {
   printf 'npm did not install the global bionic-reader command into its user prefix\n' >&2
@@ -284,7 +346,7 @@ verify_launcher "$npm_global_work" npm-global "$version"
 write_cli_wrapper "$temporary/npm-cli-bin/bionic-reader" "$node_directory" \
   "$temporary/shims" npm "$npm_global_work" "$npm_global_prefix/bin/bionic-reader"
 check_installed_cli 'the user-writable global npm prefix' "$temporary/npm-cli-bin/bionic-reader"
-npm uninstall --global --prefix "$npm_global_prefix" --offline --ignore-scripts \
+npm uninstall --global --prefix "$npm_global_prefix" ${offline_args[@]+"${offline_args[@]}"} --ignore-scripts \
   --no-audit --no-fund @arturoaviles/bionic-reader
 [[ ! -e $npm_global_prefix/bin/bionic-reader ]] || {
   printf 'npm left the global bionic-reader command installed after removal\n' >&2
@@ -322,9 +384,9 @@ PY
 
 npm_fixture="$temporary/npm"
 make_fixture "$npm_fixture" "npm@$(npm --version)"
-(cd "$npm_fixture" && npm install --offline --ignore-scripts --no-audit --no-fund --save-exact ./base.tgz)
+(cd "$npm_fixture" && npm install ${offline_args[@]+"${offline_args[@]}"} --ignore-scripts --no-audit --no-fund --save-exact ./base.tgz)
 verify_launcher "$npm_fixture" npm "$version"
-(cd "$npm_fixture" && npm uninstall --offline --ignore-scripts --no-audit --no-fund @arturoaviles/bionic-reader)
+(cd "$npm_fixture" && npm uninstall ${offline_args[@]+"${offline_args[@]}"} --ignore-scripts --no-audit --no-fund @arturoaviles/bionic-reader)
 verify_removed "$npm_fixture" npm
 
 yarn_fixture="$temporary/yarn"
@@ -336,6 +398,16 @@ enableNetwork: false
 enableScripts: false
 enableTelemetry: false
 YAML
+if [[ ${NODE_PACKAGE_MODE:-local} == registry ]]; then
+  cat >> "$yarn_fixture/.yarnrc.yml" <<YAML
+npmRegistryServer: "http://127.0.0.1:$registry_port"
+globalFolder: "$temporary/yarn-global"
+unsafeHttpWhitelist: [127.0.0.1]
+YAML
+  # Match real registry resolution over loopback, without public package access.
+  sed 's/enableNetwork: false/enableNetwork: true/' "$yarn_fixture/.yarnrc.yml" > "$yarn_fixture/.yarnrc.new"
+  mv "$yarn_fixture/.yarnrc.new" "$yarn_fixture/.yarnrc.yml"
+fi
 yarn_version=$(cd "$yarn_fixture" && yarn --version)
 [[ $yarn_version == 4.18.1 ]] || {
   printf 'Expected Yarn 4.18.1 from Corepack; found %s\n' "$yarn_version" >&2
@@ -356,17 +428,21 @@ verify_removed "$yarn_fixture" yarn
 
 pnpm_fixture="$temporary/pnpm"
 make_fixture "$pnpm_fixture" 'pnpm@12.14.0'
+if [[ ${NODE_PACKAGE_MODE:-local} == registry ]]; then
+  printf 'registry=%s\n@arturoaviles:registry=%s\n' \
+    "$npm_config_registry" "$npm_config_registry" > "$pnpm_fixture/.npmrc"
+fi
 pnpm_version=$(cd "$pnpm_fixture" && pnpm --version)
 [[ $pnpm_version == 12.14.0 ]] || {
   printf 'Expected pnpm 12.14.0 from Corepack; found %s\n' "$pnpm_version" >&2
   exit 1
 }
-(cd "$pnpm_fixture" && pnpm add --offline --ignore-scripts --store-dir "$temporary/pnpm-store" ./base.tgz)
+(cd "$pnpm_fixture" && pnpm add --reporter "${NODE_PACKAGE_REPORTER:-append-only}" ${offline_args[@]+"${offline_args[@]}"} --ignore-scripts --store-dir "$temporary/pnpm-store" ./base.tgz)
 verify_launcher "$pnpm_fixture" pnpm "$version"
 write_cli_wrapper "$temporary/pnpm-cli-bin/bionic-reader" "$node_directory" \
   "$temporary/shims" pnpm "$pnpm_fixture" "$temporary/shims/pnpm"
 check_installed_cli 'the pnpm project launcher' "$temporary/pnpm-cli-bin/bionic-reader"
-(cd "$pnpm_fixture" && pnpm remove --offline --store-dir "$temporary/pnpm-store" @arturoaviles/bionic-reader)
+(cd "$pnpm_fixture" && pnpm remove ${offline_args[@]+"${offline_args[@]}"} --store-dir "$temporary/pnpm-store" @arturoaviles/bionic-reader)
 verify_removed "$pnpm_fixture" pnpm
 
 printf 'Local npm, Yarn Plug\x27n\x27Play, and pnpm install/use/remove checks passed for bionic-reader %s\n' \

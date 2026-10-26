@@ -44,8 +44,16 @@ temporary=$(cd "$temporary" && pwd -P)
 # APT downloads as the unprivileged _apt user inside its container.
 chmod 755 "$temporary"
 
-CANDIDATE_OUTPUT_DIR="$temporary/candidates" scripts/build-release.sh "$target"
-scripts/package-linux.sh "$target" "$temporary/packages"
+if [[ -n ${PACKAGE_INPUT_DIR:-} ]]; then
+  # CI consumes the exact downloadable files from the target bundle.
+  python3 scripts/candidate-checksums.py "$PACKAGE_INPUT_DIR" --verify
+  mkdir -p "$temporary/packages"
+  cp "$PACKAGE_INPUT_DIR"/*.deb "$PACKAGE_INPUT_DIR"/*.rpm \
+    "$PACKAGE_INPUT_DIR"/*.pkg.tar.zst "$temporary/packages/"
+else
+  CANDIDATE_OUTPUT_DIR="$temporary/candidates" scripts/build-release.sh "$target"
+  scripts/package-linux.sh "$target" "$temporary/packages"
+fi
 
 run_smoke_image() {
   local manager=$1

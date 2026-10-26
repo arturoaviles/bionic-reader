@@ -56,7 +56,7 @@ incomplete control sequence over 8 KiB is discarded and drained without retainin
 its payload. Trusted terminal input preserves control bytes while bounding the
 transformer's retained parser state.
 `--low-latency` flushes a stalled partial word
-unchanged after 50 ms for ANSI filtering; reading sessions use the same
+unchanged after 50 ms for ANSI filtering of text/terminal input; reading sessions use the same
 time-bounded behavior to keep command output responsive.
 
 Markdown streaming spools input to disk and processes bounded blocks. Blocks
@@ -89,5 +89,10 @@ affect the current session.
 
 The current native candidate targets are macOS and GNU or musl Linux on x86-64
 and ARM64. Windows is outside the current target matrix. Packages are built
-from this repository; publication and host-specific release validation are
-tracked separately in the verification record.
+from this repository. GitHub Releases distribute verified native archives,
+Linux system packages, Python wheels, and standalone Node tarballs using the
+policy in [RELEASE.md](RELEASE.md). The README retains every package-manager
+installation route. Native package managers select architecture/libc from their metadata; Homebrew
+uses a generated release formula published to its tap. Cargo/Snap retain their
+repository routes. Package publication is isolated from release preparation.
+Registry publication and host-specific validation remain separate gates.

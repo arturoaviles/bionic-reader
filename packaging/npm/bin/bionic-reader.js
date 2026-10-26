@@ -3,6 +3,8 @@
 
 const { spawn } = require('node:child_process');
 const os = require('node:os');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function targetPackage() {
   if (process.platform === 'darwin') {
@@ -34,7 +36,10 @@ if (!nativePackage) {
 } else {
   let executable;
   try {
-    executable = require.resolve(`${nativePackage}/bin/bionic-reader`);
+    const bundled = path.join(__dirname, 'native', 'bionic-reader');
+    executable = fs.existsSync(bundled)
+      ? bundled
+      : require.resolve(`${nativePackage}/bin/bionic-reader`);
   } catch (error) {
     process.stderr.write(
       `bionic-reader: the optional native package ${nativePackage} is missing. ` +
