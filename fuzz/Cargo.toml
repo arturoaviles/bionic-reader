@@ -9,7 +9,7 @@ license = "MIT"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "=0.4.10"
+libfuzzer-sys = "=0.4.13"
 bionic-reader = { path = ".." }
 
 [[bin]]
