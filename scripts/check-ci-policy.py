@@ -8,7 +8,7 @@ from pathlib import Path
 def check_gate_config(workflow: str) -> None:
     """Require the gate to depend on every PR job, with no missing job IDs."""
     jobs = workflow.split("\njobs:\n", 1)[1]
-    names = set(re.findall(r"^  ([a-z][a-z-]+):$", jobs, re.MULTILINE))
+    names = set(re.findall(r"^  ([A-Za-z_][A-Za-z0-9_-]*):$", jobs, re.MULTILINE))
     gate = jobs.split("\n  ci-gate:\n", 1)[1]
     dependency_match = re.search(r"^    needs: \[([^]]+)\]$", gate, re.MULTILINE)
     if dependency_match is None:
