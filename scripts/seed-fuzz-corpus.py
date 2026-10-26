@@ -17,6 +17,9 @@ seeds = [
     base64.b64decode(
         "AqDguLbguKnguLLguYTguJE84oCN8J+g5aW95DiW55WMIOaXpeZorOiqniDguKDguLLguKnguLLguYTguJE84oCN8J+Rpg=="
     ),
+    base64.b64decode(
+        "AqDguLbguInguLLguYTguJE84oCN8J+g5aW95DiW55WMIOaXpeZorOiqniDguKDguLLguKnguLLguYTguJE8LgAAAAAAAADigI3wn5Gm"
+    ),
     b"\0\x1b]" + b"x" * 70000 + b"\x1b\\ next",
     b"\0\x1bP" + b"x" * 70000 + b"\x1b\\ next",
     b"\0\x1b[" + b"0" * 70000 + b"m next",
