@@ -12,7 +12,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Error;
 use crate::segmentation::{
-    FixationEngine, UnicodeSegmenter, WordSegmenter, is_letter_grapheme, is_word_connector,
+    FixationEngine, UnicodeSegmenter, WordSegmenter, is_grapheme_extension, is_letter_grapheme,
+    is_word_connector,
 };
 use crate::settings::{Emphasis, Settings};
 
@@ -199,6 +200,7 @@ struct Grapheme {
     end_token: usize,
     kind: GraphemeKind,
     extends_previous_word: bool,
+    contains_extension: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1562,6 +1564,7 @@ fn graphemes(tokens: &[Token]) -> Vec<Grapheme> {
             },
             extends_previous_word: !matches!(tokens[first.token].kind, TokenKind::Raw)
                 && grapheme_extends_letter(value),
+            contains_extension: value.chars().any(is_grapheme_extension),
         });
         map_index = last_index + 1;
     }
@@ -1599,9 +1602,13 @@ fn grapheme_extends_letter(value: &str) -> bool {
 #[must_use]
 fn trailing_candidate_start(units: &[Grapheme]) -> Option<usize> {
     let last = units.len().checked_sub(1)?;
-    let is_word_unit = |kind| matches!(kind, GraphemeKind::Letter | GraphemeKind::Number);
+    // Combining marks can affect ICU's following complex-script word boundaries,
+    // including when a malformed byte is their grapheme's visible placeholder.
+    let is_word_unit = |unit: &Grapheme| {
+        matches!(unit.kind, GraphemeKind::Letter | GraphemeKind::Number) || unit.contains_extension
+    };
     let is_connector = |kind| matches!(kind, GraphemeKind::Apostrophe | GraphemeKind::Connector);
-    if !is_word_unit(units[last].kind) && !is_connector(units[last].kind) {
+    if !is_word_unit(&units[last]) && !is_connector(units[last].kind) {
         return None;
     }
 
@@ -1609,8 +1616,11 @@ fn trailing_candidate_start(units: &[Grapheme]) -> Option<usize> {
     // leading connector run: ICU can resolve those connectors only after a
     // neighboring word character arrives (for example, ExtendNumLet).
     let mut cursor = last;
+    // A raw or nonword base still closes the preceding word. Retain that
+    // grapheme only as context for the word that may follow its extending marks.
     while cursor > 0
-        && (is_word_unit(units[cursor - 1].kind) || is_connector(units[cursor - 1].kind))
+        && !matches!(units[cursor].kind, GraphemeKind::Raw | GraphemeKind::Other)
+        && (is_word_unit(&units[cursor - 1]) || is_connector(units[cursor - 1].kind))
     {
         cursor -= 1;
     }
