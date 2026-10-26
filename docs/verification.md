@@ -168,3 +168,24 @@ before cache probes/select nightly explicitly, and anchor root Cargo package
 support files. Dependency Review, both dependency policies/audits, Gitleaks and
 all three CodeQL languages passed on that first revision. Subsequent matrix
 results must be checked at the latest commit.
+
+The corrected implementation at `9e3a4545c67b340213307a198d16db50541dcd53`
+passed the [complete PR CI run](https://github.com/arturoaviles/bionic-reader/actions/runs/40278944373).
+The PR reported **39 successful checks**, with only the main-push attestation job
+intentionally skipped. All six native bundles, native x86-64/ARM64 glibc 2.28
+execution, source/Git/package installation, all 11 installation routes, coverage
+floors, Miri, PR fuzzing, workflow/document checks and CI gate passed. Separate
+RustSec/policy/Dependency Review, Gitleaks, all three CodeQL languages and
+Dependabot configuration validation also passed; no open CodeQL alerts were
+reported for the PR. These results identify that exact implementation commit;
+subsequent revisions still require their own full checks.
+
+The failing first run also exercised the real aggregate gate: it rejected the
+failed Rust/candidate/package/lint/source matrices and the resulting skipped
+runtime job. After the fixes, the same gate passed. The refreshed local Cargo
+archive passed its content audit, installation, CLI/PTY use and uninstall. An
+additional 60-second settings mutation smoke tested 15 mutants (nine caught,
+six surviving) and successfully stopped both workers at its budget while retaining
+logs and outcomes. These partial mutation reports remain advisory; the full
+scheduled campaigns and main-push attestations await the main rollout described
+in [the CI rollout instructions](ci/README.md).
