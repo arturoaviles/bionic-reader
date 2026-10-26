@@ -189,3 +189,16 @@ six surviving) and successfully stopped both workers at its budget while retaini
 logs and outcomes. These partial mutation reports remain advisory; the full
 scheduled campaigns and main-push attestations await the main rollout described
 in [the CI rollout instructions](ci/README.md).
+
+## Live CI rollout
+
+PR #2 was merged after its final matrix passed. Main candidate provenance/SBOM
+verification passed for all six targets, and the guarded ruleset activation
+succeeded. The first assurance reports and effective merge-policy details are
+recorded in [the 2026-10-26 rollout record](ci/rollout-2026-10-26.md).
+
+A follow-up regression closes the gate-consistency scanner's handling of valid
+job IDs containing digits, underscores or capitals. Before the fix, an omitted
+`integration_v2` job escaped the dependency guard; the corrected scanner rejects
+it. Eight gate/checksum/toolchain tests, Ruff and strict typing checks passed
+locally. The follow-up itself must pass the newly required PR checks.

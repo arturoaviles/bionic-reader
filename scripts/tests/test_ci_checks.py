@@ -36,6 +36,17 @@ class GateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy["check_toolchain"]('rust-version = "1.85.1"', 'channel = "stable"')
 
+    def test_all_valid_job_id_styles_must_be_aggregated(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        for job_id in ("integration_v2", "Build2", "_quality"):
+            with self.subTest(job_id=job_id), self.assertRaises(ValueError):
+                added = workflow.replace(
+                    "\n  ci-gate:\n",
+                    f"\n  {job_id}:\n    runs-on: ubuntu-24.04\n"
+                    "    steps:\n      - run: echo done\n\n  ci-gate:\n",
+                )
+                policy["check_gate_config"](added)
+
 
 class ChecksumTests(unittest.TestCase):
     def test_tampering_missing_and_extra_files_fail(self):
