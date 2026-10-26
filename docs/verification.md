@@ -202,3 +202,100 @@ job IDs containing digits, underscores or capitals. Before the fix, an omitted
 `integration_v2` job escaped the dependency guard; the corrected scanner rejects
 it. Eight gate/checksum/toolchain tests, Ruff and strict typing checks passed
 locally. The follow-up itself must pass the newly required PR checks.
+
+## GitHub Release preparation
+
+The current distribution policy is recorded in [ADR 0003](adr/0003-github-release-distribution.md).
+The [README](../README.md#installation) now leads with prebuilt GitHub Release
+installation, while [BUILD.md](BUILD.md) retains source and local-package builds.
+[RELEASE.md](RELEASE.md) defines the SemVer compatibility contract, exact-commit
+candidate promotion, draft publication process, and remaining platform gates.
+No release has been published. Historical candidate/test measurements above are
+not evidence that the new release workflow has run successfully; its first main
+CI, tag preparation, and clean-machine installation results must be recorded.
+
+Local validation of this change passed 20 CI/release/installer regression tests, including
+all-six-target staging and rejection of failed provenance, tag/version drift,
+wrong-source runs, incomplete bundles and asset collisions. Actionlint,
+yamllint, Zizmor, ShellCheck, Ruff, strict mypy, package metadata invariants,
+spelling, and offline Markdown links/anchors passed. A native macOS ARM64 archive
+using the current README passed extraction, symlink installation, shipped adapter
+checks, the installed CLI/PTY smoke, and launcher removal in a temporary home.
+The full distribution wrapper could not run locally because fish is absent;
+its independent checks relevant to this change passed. The GitHub matrix and
+live draft-release creation have not been run for this working-tree revision.
+
+The README again includes Homebrew, apt, dnf, pacman, pip, uv, npm, Yarn, pnpm,
+Cargo and Snap installation commands. The release installer detects the OS,
+architecture and Linux libc and selects a checksum-verified native asset. Release
+bundles now include six standalone Node tarballs, a generated Homebrew formula,
+and the installer; Cargo/Snap retain repository installation routes.
+
+On macOS ARM64, the actual installer passed isolated archive, pip, uv, npm,
+Yarn 4.18.1 and pnpm 12.14.0 installations with full installed CLI/PTY checks for
+each, plus verified download-only mode. Separate standalone npm/Yarn Plug'n'Play/
+pnpm install/use/uninstall checks also passed. The uv tool path exposed an
+unsupported `--no-deps` flag; it was removed from the installer and BUILD.md.
+The two existing compiled distribution regression tests passed against the
+current archive builder and JS launcher. Recompiling those unchanged Rust tests
+offline was unavailable because the local Cargo indexes lack required entries.
+The Homebrew release formula is generated/hashed and its platform selection is
+covered locally; a live release-backed Homebrew install and the full Linux/musl
+matrix still require published candidate runs. Workflow lint/security, ShellCheck,
+Ruff, strict typing, package invariants, spelling and offline links passed.
+No public release has been created or published by this work.
+
+## Native package-manager publication and README reorganization
+
+This update supersedes the Python-dispatcher installation approach described in
+the earlier iterations above. The README is now about 140 lines, with direct
+native package-manager commands and short reader/CLI/configuration examples.
+Detailed material lives in INSTALL.md, USAGE.md, CONFIGURATION.md, SHELL.md,
+BUILD.md and RELEASE.md. The [Glow comparison](ci/distribution-review.md) records
+the reference review and the distribution changes it motivated.
+
+The Python installer was removed. Release assembly now derives seven npm
+registry packages from the six verified standalone payloads and adds stable
+architecture-specific Linux asset aliases. Post-release publication has separate,
+opt-in Homebrew, PyPI, npm and GitHub Packages jobs. It verifies the public release,
+current tag, complete checksums and original main CI provenance before staging
+credential-isolated publishing inputs. npm retries require matching SHA-512
+integrity, and the Homebrew updater refuses same-version replacement or rollback
+to an older formula. No registry ownership or credentials were created/configured.
+
+Local validation passed **17** CI/release/publication regressions, Actionlint,
+yamllint, Zizmor, ShellCheck, Ruff, strict mypy, package invariants, spelling and
+tracked/new Markdown link/anchor checks. Native macOS ARM64 registry-format
+install/use/uninstall passed through npm, Yarn 4.18.1 Plug'n'Play and pnpm
+12.14.0, including complete installed CLI and Bash PTY checks for each manager.
+The loopback fixture supplies realistic publication metadata, isolates tool and
+Yarn metadata caches, and bootstraps pnpm before restricting package resolution
+to the local registry. All fixture processes/directories are cleaned up.
+
+The broader Rust/Linux/musl matrix and live registry/tap publication still require
+the revised workflows on main. The complete local distribution wrapper remains
+unavailable because fish is absent. The native package-manager commands are
+explicitly marked pending in the README until the first release and configured
+channels are actually public. No public release or package was published by this
+work; [RELEASE.md](RELEASE.md#publishing-package-managers) lists activation steps.
+
+## PR 8 review and CI corrections
+
+The archive uninstall instructions now match manual extraction and the PATH entry
+added during installation. The failed candidate jobs exposed npm rejecting static
+musl standalone packages on glibc runners: those standalone manifests now accept
+both libc families, while registry-native optional dependencies retain their
+strict musl/glibc selectors. A regression test covers that distinction.
+
+The macOS registry fixture now waits up to 30 seconds for an atomically published
+readiness file and prints its server log on startup failure. The coverage CLI
+test creates its closed output pipe after fork, preventing other parallel test
+children from temporarily inheriting the reader and masking EPIPE.
+
+Local validation passed 18 release/publication regressions, all 17 CLI tests,
+Clippy with warnings denied, formatting, workflow/security/policy checks,
+ShellCheck, Ruff, strict mypy, package invariants, spelling and offline links.
+Registry installation, full installed CLI/Bash PTY use and removal passed with
+npm, Yarn Plug'n'Play and pnpm on macOS ARM64. The broader Rust run passed its
+unit, property, CLI and distribution suites; two session tests require fish,
+which is absent locally. Linux/musl and coverage validation runs in GitHub CI.

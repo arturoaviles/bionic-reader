@@ -82,7 +82,10 @@ jobs:
       - name: Check generated completion files
         run: make completions-check
       - name: Test offline npm, Yarn PnP, and pnpm installs
-        run: scripts/check-node-package-installs.sh target/debug/bionic-reader
+        run: |
+          scripts/check-node-package-installs.sh target/debug/bionic-reader
+          NODE_PACKAGE_MODE=standalone scripts/check-node-package-installs.sh target/debug/bionic-reader
+          NODE_PACKAGE_MODE=registry scripts/check-node-package-installs.sh target/debug/bionic-reader
 
   coverage:
     name: Line, branch, and end-to-end coverage
@@ -355,6 +358,8 @@ jobs:
           scripts/build-local-archive.sh
           scripts/package-npm.sh --local
           scripts/check-node-package-installs.sh target/aarch64-apple-darwin/release/bionic-reader
+          NODE_PACKAGE_MODE=standalone scripts/check-node-package-installs.sh target/aarch64-apple-darwin/release/bionic-reader
+          NODE_PACKAGE_MODE=registry scripts/check-node-package-installs.sh target/aarch64-apple-darwin/release/bionic-reader
 
   framework-loader-tests:
     name: Pinned shell-framework loader tests
@@ -481,11 +486,28 @@ jobs:
           tool: cargo-cyclonedx@0.5.9
           checksum: true
           fallback: none
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.zig
+        with:
+          go-version: '1.26.4'
+          cache: false
+      - name: Build direct-install Linux packages
+        if: matrix.zig
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          go install -ldflags="-X main.version=2.47.0" github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          go_bin="$(go env GOPATH)/bin"
+          export PATH="$go_bin:$PATH"
+          scripts/package-linux.sh "$CANDIDATE_TARGET" "$RUNNER_TEMP/system-packages"
       - name: Build the wheel without installing it
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
           WHEEL_BUILD_ONLY: '1'
         run: scripts/build-python-wheel.sh "$CANDIDATE_TARGET" "$RUNNER_TEMP/python-wheels"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
       - name: Stage and verify the complete target bundle
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
@@ -493,6 +515,10 @@ jobs:
           mkdir -p dist/bundle
           cp dist/candidates/v*/bionic-reader-v*-"$CANDIDATE_TARGET".tar.gz dist/bundle/
           cp "$RUNNER_TEMP"/python-wheels/*.whl dist/bundle/
+          if [[ -d "$RUNNER_TEMP/system-packages" ]]; then
+            cp "$RUNNER_TEMP"/system-packages/* dist/bundle/
+          fi
+          python3 scripts/package-release-node.py dist/bundle/*.tar.gz --output dist/bundle
           scripts/generate-sbom.sh "$CANDIDATE_TARGET" dist/bundle
           python3 scripts/candidate-checksums.py dist/bundle
           python3 scripts/candidate-checksums.py dist/bundle --verify
@@ -506,7 +532,16 @@ jobs:
           tar -xzf dist/bundle/*.tar.gz --strip-components=1 -C "$install_root"
           python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
           scripts/check-python-wheel-install.sh "$CANDIDATE_TARGET" dist/bundle/*.whl
-      - name: Build and install the README's host-local Python wheel
+      - name: Install and use the exact standalone npm release package
+        # zizmor: ignore[adhoc-packages] Tests the verified local tarball offline, with lifecycle scripts disabled.
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          # Standalone musl packages declare their static binary's glibc compatibility.
+          npm install --prefix "$RUNNER_TEMP/release-node" --offline --ignore-scripts \
+            --no-audit --no-fund dist/bundle/*.npm.tgz
+          python3 scripts/check-installed-cli.py "$RUNNER_TEMP/release-node/node_modules/.bin/bionic-reader"
+      - name: Build and install the build guide's host-local Python wheel
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
         run: |
@@ -525,6 +560,7 @@ jobs:
 
   linux-package-install-smoke:
     name: Signed Debian, Fedora, and Arch install smokes
+    needs: target-builds
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -564,7 +600,13 @@ jobs:
           key: msrv-zig-package-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: false
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - name: Build signed-repository candidates and install in distro containers
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-x86_64-unknown-linux-gnu
+          path: dist/package-bundle
+      - name: Install the exact candidate packages in distro containers
+        env:
+          PACKAGE_INPUT_DIR: ${{ github.workspace }}/dist/package-bundle
         run: scripts/package-manager-install-smoke.sh
 
   macos-shell-tests:

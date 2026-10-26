@@ -1,0 +1,196 @@
+name: Publish package managers
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published vMAJOR.MINOR.PATCH release to distribute
+        required: true
+        type: string
+      channel:
+        description: Channel to publish or retry
+        required: true
+        default: all
+        type: choice
+        options: [all, homebrew, pypi, npm, github-packages]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Verify published release inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release, tag, complete checksums and original CI provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: python3 scripts/stage-publication.py "$RELEASE_TAG" --output publication
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publication
+          path: publication/
+          if-no-files-found: error
+          retention-days: 14
+
+  pypi:
+    name: Publish Python wheels
+    if: vars.PUBLISH_PYPI == 'true' && (inputs.channel == '' || inputs.channel == 'all' || inputs.channel == 'pypi')
+    needs: prepare
+    environment: pypi
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publication
+          path: publication
+      - name: Verify and isolate wheel files
+        run: |
+          (cd publication/pypi && sha256sum --check --strict SHA256SUMS)
+          mkdir python-dist
+          cp publication/pypi/*.whl python-dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
+        with:
+          packages-dir: python-dist/
+          attestations: true
+
+  npm:
+    name: Publish npm packages
+    if: vars.PUBLISH_NPM == 'true' && (inputs.channel == '' || inputs.channel == 'all' || inputs.channel == 'npm')
+    needs: prepare
+    environment: npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publication
+          path: publication
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - name: Publish native packages before their launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          (cd publication/npm && sha256sum --check --strict SHA256SUMS)
+          python3 publication/npm/publish-npm.py publication/npm --registry https://registry.npmjs.org --provenance
+
+  github-packages:
+    name: Publish GitHub npm packages
+    if: vars.PUBLISH_GITHUB_PACKAGES == 'true' && (inputs.channel == '' || inputs.channel == 'all' || inputs.channel == 'github-packages')
+    needs: prepare
+    environment: github-packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publication
+          path: publication
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+          package-manager-cache: false
+          registry-url: https://npm.pkg.github.com
+          scope: '@arturoaviles'
+      - name: Publish GitHub Packages without lifecycle scripts
+        # zizmor: ignore[use-trusted-publishing] GitHub npm Packages uses the job-scoped GITHUB_TOKEN; npm OIDC targets npmjs.org.
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          (cd publication/npm && sha256sum --check --strict SHA256SUMS)
+          python3 publication/npm/publish-npm.py publication/npm --registry https://npm.pkg.github.com
+
+  homebrew:
+    name: Update Homebrew tap
+    if: vars.PUBLISH_HOMEBREW == 'true' && (inputs.channel == '' || inputs.channel == 'all' || inputs.channel == 'homebrew')
+    needs: prepare
+    environment: homebrew
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publication
+          path: publication
+      - name: Publish verified formula to the configured tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'arturoaviles/homebrew-tap' }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          (cd publication/homebrew && sha256sum --check --strict SHA256SUMS)
+          python3 - <<'PY'
+          import base64, json, os, re, subprocess
+          from pathlib import Path
+          endpoint = f"repos/{os.environ['TAP_REPOSITORY']}/contents/Formula/bionic-reader.rb"
+          existing = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True)
+          request = {
+              "message": f"Release Bionic Reader {os.environ['RELEASE_TAG']}",
+              "content": base64.b64encode(Path("publication/homebrew/bionic-reader.rb").read_bytes()).decode(),
+          }
+          if existing.returncode == 0:
+              current = json.loads(existing.stdout)
+              if current["content"].replace("\n", "") == request["content"]:
+                  print("Formula is already current")
+                  raise SystemExit(0)
+              formula = base64.b64decode(current["content"]).decode()
+              match = re.search(r'^  version "([0-9]+\.[0-9]+\.[0-9]+)"$', formula, re.MULTILINE)
+              if match is None:
+                  raise ValueError("Cannot determine the current tap version")
+              current_version = tuple(map(int, match[1].split(".")))
+              requested_version = tuple(map(int, os.environ["RELEASE_TAG"][1:].split(".")))
+              if current_version > requested_version:
+                  print("Tap already has a newer version; leaving it in place")
+                  raise SystemExit(0)
+              if current_version == requested_version:
+                  raise ValueError("Existing formula version has different contents")
+              request["sha"] = current["sha"]
+          elif "HTTP 404" not in existing.stderr:
+              raise RuntimeError(existing.stderr)
+          Path("formula-update.json").write_text(json.dumps(request))
+          subprocess.run(["gh", "api", "--method", "PUT", endpoint,
+                          "--input", "formula-update.json"], check=True)
+          PY
+
+  report:
+    name: Publication results
+    if: always()
+    needs: [prepare, pypi, npm, github-packages, homebrew]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record each channel including disabled channels
+        env:
+          PUBLISH_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          printf '### Package publication results\n\nDisabled or unselected channels are skipped, not published.\n\n%s\n' "$PUBLISH_RESULTS" >> "$GITHUB_STEP_SUMMARY"

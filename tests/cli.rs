@@ -200,17 +200,36 @@ fn a_large_stream_preserves_malformed_bytes_and_line_endings() {
 
 #[test]
 fn a_closed_output_pipe_exits_without_a_panic() {
+    use std::io;
+    use std::os::unix::process::CommandExt;
+
     let home = tempfile::tempdir().expect("create temporary home for closed pipe test");
-    let mut child = command(home.path())
+    let mut invocation = command(home.path());
+    invocation
         .args(["--style", "always"])
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn CLI for closed pipe test");
-    // Hold stdin open until the only reader of stdout is gone, so the write
-    // reliably exercises EPIPE rather than racing with process startup.
-    drop(child.stdout.take());
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    // SAFETY: only async-signal-safe descriptor operations run between fork and
+    // exec. Creating the pipe in the child prevents concurrent tests from
+    // inheriting its reader, which must be closed before the CLI writes.
+    unsafe {
+        invocation.pre_exec(|| {
+            let mut descriptors = [-1; 2];
+            if libc::pipe(descriptors.as_mut_ptr()) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            libc::close(descriptors[0]);
+            if libc::dup2(descriptors[1], libc::STDOUT_FILENO) < 0 {
+                let error = io::Error::last_os_error();
+                libc::close(descriptors[1]);
+                return Err(error);
+            }
+            libc::close(descriptors[1]);
+            Ok(())
+        })
+    };
+    let mut child = invocation.spawn().expect("spawn CLI for closed pipe test");
     child
         .stdin
         .take()

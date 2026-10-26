@@ -1,0 +1,83 @@
+name: Prepare GitHub Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vMAJOR.MINOR.PATCH tag on a tested main commit
+        required: true
+        type: string
+      ci_run:
+        description: Main-push CI run ID (empty selects a successful run at the tag)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Verify and stage release assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      sha: ${{ steps.prepare.outputs.sha }}
+    steps:
+      # Run preparation code from main; tagged candidate code is never executed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source, CI, candidate checksums and provenance
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          CI_RUN: ${{ inputs.ci_run }}
+        run: python3 scripts/prepare-release.py "$RELEASE_TAG" --run-id "$CI_RUN" --output release-assets
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  draft:
+    name: Create draft GitHub Release
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # This write-capable job never checks out or executes repository code.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Verify final assets and create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          (cd release-assets && sha256sum --check --strict SHA256SUMS)
+          current_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
+          test "$current_sha" = "$SOURCE_SHA"
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --target "$SOURCE_SHA" \
+            --draft --title "Bionic Reader $RELEASE_TAG" --generate-notes

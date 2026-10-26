@@ -124,8 +124,8 @@ def main() -> None:
     for name in ("bash", "zsh", "fish"):
         require(
             f"bionic-reader completions {name}"
-            in (root / "README.md").read_text(encoding="utf-8"),
-            f"README must document completion generation for {name}",
+            in (root / "docs/SHELL.md").read_text(encoding="utf-8"),
+            f"Shell guide must document completion generation for {name}",
         )
 
     print("Package metadata invariants passed.")

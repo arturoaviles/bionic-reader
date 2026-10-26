@@ -154,7 +154,7 @@ esac
 
 verify_installed_package
 python3 "$repo_root/scripts/check-installed-cli.py" "$(command -v bionic-reader)"
-# Exercise the README's direct local-file installation as well as the signed repository.
+# Exercise the build guide's direct local-file installation as well as the signed repository.
 remove_package
 case "$manager" in
   debian)
