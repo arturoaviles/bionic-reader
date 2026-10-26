@@ -490,7 +490,7 @@ fn contains_letter_grapheme(text: &str) -> bool {
     text.graphemes(true).any(is_letter_grapheme)
 }
 
-fn is_grapheme_extension(character: char) -> bool {
+pub(crate) fn is_grapheme_extension(character: char) -> bool {
     if character.is_ascii() {
         return false;
     }
