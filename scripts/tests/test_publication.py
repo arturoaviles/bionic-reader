@@ -2,8 +2,10 @@
 
 import base64
 import hashlib
+import io
 import json
 import runpy
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +15,7 @@ from test_release import bundle
 ROOT = Path(__file__).resolve().parents[2]
 registry = runpy.run_path(str(ROOT / "scripts/package-registries.py"))
 publisher = runpy.run_path(str(ROOT / "scripts/publish-npm.py"))
+standalone = runpy.run_path(str(ROOT / "scripts/package-release-node.py"))
 publication = runpy.run_path(str(ROOT / "scripts/stage-publication.py"))
 
 
@@ -59,6 +62,10 @@ class PublicationTests(unittest.TestCase):
                 native = registry["read_package"](path)
                 identity = json.loads(native["package.json"][0])
                 actual.add(identity["name"])
+                if identity["name"].endswith("-musl"):
+                    self.assertEqual(identity["libc"], ["musl"])
+                elif identity["name"].endswith("-gnu"):
+                    self.assertEqual(identity["libc"], ["glibc"])
                 self.assertEqual(identity["version"], "0.1.0")
                 self.assertEqual(
                     native["bin/bionic-reader"][0], b"verified native executable"
@@ -70,6 +77,31 @@ class PublicationTests(unittest.TestCase):
                     )
                 )
             self.assertEqual(actual, set(manifest["optionalDependencies"]))
+
+    def test_static_musl_standalone_accepts_glibc_without_relaxing_registry_selection(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for target, expected in (
+                ("x86_64-unknown-linux-musl", ["musl", "glibc"]),
+                ("aarch64-unknown-linux-musl", ["musl", "glibc"]),
+                ("x86_64-unknown-linux-gnu", ["glibc"]),
+            ):
+                archive = root / f"bionic-reader-v0.1.0-{target}.tar.gz"
+                with tarfile.open(archive, "w:gz") as output:
+                    for name, data in (
+                        ("bin/bionic-reader", b"native binary"),
+                        ("LICENSE", b"MIT"),
+                    ):
+                        member = tarfile.TarInfo(f"bionic-reader-0.1.0-{target}/{name}")
+                        member.size = len(data)
+                        output.addfile(member, io.BytesIO(data))
+                package = standalone["package"](archive, root / "standalone")
+                manifest = json.loads(
+                    registry["read_package"](package)["package.json"][0]
+                )
+                self.assertEqual(manifest["libc"], expected)
 
     def test_existing_registry_version_requires_identical_tarball(self):
         with tempfile.TemporaryDirectory() as directory:

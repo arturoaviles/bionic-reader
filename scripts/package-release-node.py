@@ -42,7 +42,9 @@ def package(archive: Path, output: Path) -> Path:
         "preferUnplugged": True,
     }
     if libc is not None:
-        manifest["libc"] = [libc]
+        # Static musl executables also run on glibc hosts. Registry-native
+        # dependencies retain their stricter libc selector in package-registries.py.
+        manifest["libc"] = ["musl", "glibc"] if libc == "musl" else [libc]
     launcher = (
         Path(__file__).resolve().parents[1] / "packaging/npm/bin/bionic-reader.js"
     )

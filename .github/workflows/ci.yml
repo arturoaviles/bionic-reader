@@ -537,9 +537,7 @@ jobs:
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
         run: |
-          if [[ $CANDIDATE_TARGET == *-musl ]]; then
-            export npm_config_libc=musl
-          fi
+          # Standalone musl packages declare their static binary's glibc compatibility.
           npm install --prefix "$RUNNER_TEMP/release-node" --offline --ignore-scripts \
             --no-audit --no-fund dist/bundle/*.npm.tgz
           python3 scripts/check-installed-cli.py "$RUNNER_TEMP/release-node/node_modules/.bin/bionic-reader"

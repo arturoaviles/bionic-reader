@@ -131,14 +131,22 @@ base = registry["read_package"](base_path)
 manifest = json.loads(base["package.json"][0])
 PYREGISTRY
   base_tarball="$temporary/registry/bionic-reader-npm-base-v$version.tgz"
-  python3 scripts/tests/registry_server.py "$temporary/registry" "$temporary/registry-port" &
+  python3 scripts/tests/registry_server.py "$temporary/registry" "$temporary/registry-port" > "$temporary/registry-server.log" 2>&1 &
   registry_pid=$!
-  for _ in {1..50}; do
+  for _ in {1..300}; do
     [[ ! -s $temporary/registry-port ]] || break
-    kill -0 "$registry_pid" 2>/dev/null || exit 1
+    if ! kill -0 "$registry_pid" 2>/dev/null; then
+      cat "$temporary/registry-server.log" >&2
+      printf 'The registry fixture exited before becoming ready.\n' >&2
+      exit 1
+    fi
     sleep 0.1
   done
-  [[ -s $temporary/registry-port ]]
+  if [[ ! -s $temporary/registry-port ]]; then
+    cat "$temporary/registry-server.log" >&2
+    printf 'The registry fixture did not become ready within 30 seconds.\n' >&2
+    exit 1
+  fi
   registry_port=$(cat "$temporary/registry-port")
   # Bootstrap the pinned package-manager binary before restricting package
   # resolution to the loopback fixture. pnpm 12 fetches a native tool binary.

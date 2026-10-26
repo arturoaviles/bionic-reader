@@ -278,3 +278,24 @@ unavailable because fish is absent. The native package-manager commands are
 explicitly marked pending in the README until the first release and configured
 channels are actually public. No public release or package was published by this
 work; [RELEASE.md](RELEASE.md#publishing-package-managers) lists activation steps.
+
+## PR 8 review and CI corrections
+
+The archive uninstall instructions now match manual extraction and the PATH entry
+added during installation. The failed candidate jobs exposed npm rejecting static
+musl standalone packages on glibc runners: those standalone manifests now accept
+both libc families, while registry-native optional dependencies retain their
+strict musl/glibc selectors. A regression test covers that distinction.
+
+The macOS registry fixture now waits up to 30 seconds for an atomically published
+readiness file and prints its server log on startup failure. The coverage CLI
+test creates its closed output pipe after fork, preventing other parallel test
+children from temporarily inheriting the reader and masking EPIPE.
+
+Local validation passed 18 release/publication regressions, all 17 CLI tests,
+Clippy with warnings denied, formatting, workflow/security/policy checks,
+ShellCheck, Ruff, strict mypy, package invariants, spelling and offline links.
+Registry installation, full installed CLI/Bash PTY use and removal passed with
+npm, Yarn Plug'n'Play and pnpm on macOS ARM64. The broader Rust run passed its
+unit, property, CLI and distribution suites; two session tests require fish,
+which is absent locally. Linux/musl and coverage validation runs in GitHub CI.

@@ -71,5 +71,7 @@ class Registry(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Registry)
-args.port_file.write_text(str(server.server_port))
+ready_file = args.port_file.with_suffix(".tmp")
+ready_file.write_text(str(server.server_port))
+ready_file.replace(args.port_file)
 server.serve_forever()

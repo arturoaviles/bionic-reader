@@ -153,7 +153,7 @@ see [SHELL.md](SHELL.md) for explicit shell setup.
 Use the route matching your installation:
 
 - Homebrew: `brew uninstall arturoaviles/tap/bionic-reader`, then `brew untap arturoaviles/tap`.
-- Archive: remove the `~/.local/bin/bionic-reader` symlink, then its versioned directory under `~/.local/share/bionic-reader/releases`.
+- Archive: remove the extracted archive directory and the PATH entry you added for its `bin` directory.
 - Debian / Ubuntu: `sudo apt remove bionic-reader`.
 - Fedora: `sudo dnf remove bionic-reader`.
 - Arch Linux: `sudo pacman -R bionic-reader`.
