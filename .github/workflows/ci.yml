@@ -43,6 +43,14 @@ jobs:
             --ignore-scripts --no-save --no-audit --no-fund --package-lock=false \
             corepack@0.36.0
           echo "$RUNNER_TEMP/bionic-reader-node-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: msrv-native-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Check and lint
         run: |
           make help
@@ -95,8 +103,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes fish zsh
           rustup toolchain install nightly-2026-10-22 --profile minimal --component llvm-tools-preview
-          rustup default nightly-2026-10-22
-          cargo install cargo-llvm-cov --version 0.9.1 --locked
+          echo RUSTUP_TOOLCHAIN=nightly-2026-10-22 >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-llvm-cov@0.9.1
+          checksum: true
+          fallback: none
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: nightly-coverage-branch-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Measure unit, property, CLI, file-pipeline, and terminal workflows
         run: cargo llvm-cov --branch --locked --all-targets --no-report
       - name: Include actual upstream framework startup workflows
@@ -157,9 +177,20 @@ jobs:
       - name: Install pinned verification toolchain and tools
         run: |
           rustup toolchain install nightly-2026-10-22 --profile minimal
-          cargo +nightly-2026-10-22 install cargo-hack --version 0.6.45 --locked
-          cargo +nightly-2026-10-22 install cargo-udeps --version 0.1.61 --locked
           rustup toolchain install 1.85.1 --profile minimal
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-hack@0.6.45,cargo-udeps@0.1.61
+          checksum: true
+          fallback: none
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: nightly-maintenance-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Check feature combinations on the minimum compiler
         run: cargo +1.85.1 hack check --locked --feature-powerset --all-targets
       - name: Check for unused dependencies
@@ -175,6 +206,14 @@ jobs:
           persist-credentials: false
       - name: Install pinned Miri toolchain
         run: rustup toolchain install nightly-2026-10-22 --profile minimal --component miri --component rust-src
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: nightly-miri-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Interpret UTF-8 and ANSI boundary regressions
         # Real PTYs, processes, and signal handling remain covered by native integration tests.
         run: |
@@ -193,42 +232,17 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-10-22 --profile minimal
           cargo +nightly-2026-10-22 install cargo-fuzz --version 0.13.2 --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: nightly-asan-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Fuzz byte streams and document rendering with sanitizers
         run: |
-          python3 - <<'PY'
-          import base64
-          from pathlib import Path
-          corpus = Path('fuzz/corpus/byte_stream')
-          corpus.mkdir(parents=True, exist_ok=True)
-          seeds = [
-              'café cafe\u0301 niño 你好世界 日本語 ภาษาไทย 👨‍👩‍👧‍👦'.encode(),
-              b'\x1b[2;31mreading\x1b[22m \x1b[4:0mword \x1b[4:3mtext\x1b[0m',
-              b'\x1b]52;c;YXVkaXQ=\x07before \x1b]8;;https://example.test\x1b\\link\x1b]8;;\x1b\\',
-              b'# Heading\n\n[link](javascript:alert(1)) `code`\n```rust\nlet value = 1;\n```\n',
-              b'word\xff\xfe\r\n\x1b[',
-              b'a' * 70000 + b' next',
-              b'a' * 10920 + 'ฟ'.encode() + b'a' * 59077 + b' next',
-              base64.b64decode('AqDguLbguKnguLLguYTguJE84oCN8J+g5aW95DiW55WMIOaXpeZorOiqniDguKDguLLguKnguLLguYTguJE84oCN8J+Rpg=='),
-              b'\0\x1b]' + b'x' * 70000 + b'\x1b\\ next',
-              b'\0\x1bP' + b'x' * 70000 + b'\x1b\\ next',
-              b'\0\x1b[' + b'0' * 70000 + b'm next',
-              b'\0' + '漢'.encode() * 8192 + b' next',
-              b'\0a' + '\u0301'.encode() * 35000 + b' next',
-              b'\0\x1b]0;' + 'Üₜ'.encode() + b'\xc2\x9c next',
-              b'\0\x1bP' + 'Üₜ'.encode() + b'\x9c next',
-              b'\0\x1b(\0 next',
-              b'\0\x1b' + b'(' * 9000 + b'\0 next',
-              b'\0\x9b2;31mreading\x9b22m next\x9b0m',
-              b'\0\xc2\x9b2;31mreading\xc2\x9b22m next\xc2\x9b0m',
-              b'\0\x9d8;;https://example.test/\xc3\x9c\x9creading\x9d8;;\x9c',
-              b'\0/\xd8\x94',
-              b'\0a' + b'\xcc\x81' * 1327 + b'\xcc' + b'\xcc\x81' * 22210 + b'\xcc' + b'\xcc\x81' * 11462 + b' next',
-              b'\0a' + b'\xcc' * 32768,
-              b'\0a' + b'\xcc' * 9875 + b'\x8b' * 52 + b'\xcc' * 22893,
-          ]
-          for index, seed in enumerate(seeds):
-              (corpus / f'seed-{index}').write_bytes(seed)
-          PY
+          python3 scripts/seed-fuzz-corpus.py
           cargo +nightly-2026-10-22 fuzz run byte_stream -- -max_total_time=60 -max_len=131072 -timeout=10
       - name: Upload reproducible fuzz failure inputs
         if: failure()
@@ -268,6 +282,10 @@ jobs:
         run: |
           rustup toolchain install 1.85.1 --profile minimal
           rustup default 1.85.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: msrv-homebrew-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build from this checkout and install through a local tap
         run: |
           scripts/build-local-archive.sh
@@ -312,11 +330,20 @@ jobs:
         with:
           node-version: '24.11.1'
       - name: Install build tools
+        # zizmor: ignore[adhoc-packages] Corepack is pinned; lifecycle scripts and lockfile writes are disabled.
         run: |
           rustup toolchain install 1.85.1 --profile minimal
           rustup default 1.85.1
           npm install --prefix "$RUNNER_TEMP/node-tools" --ignore-scripts --no-save --no-audit --no-fund --package-lock=false corepack@0.36.0
           echo "$RUNNER_TEMP/node-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: msrv-node-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build local archive and test local Node tarball installations
         run: |
           scripts/build-local-archive.sh
@@ -338,6 +365,14 @@ jobs:
           rustup toolchain install 1.85.1 --profile minimal
           rustup default 1.85.1
           cargo fetch --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: msrv-frameworks-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Secure runner Zsh completion directories
         # Preserve the frameworks' compaudit checks on hosted-runner directories.
         run: |
@@ -414,24 +449,57 @@ jobs:
           test -x "$zig_dir/zig"
           echo "$zig_dir" >> "$GITHUB_PATH"
           rustup toolchain install stable --profile minimal
-          cargo +stable install cargo-zigbuild --version 0.23.4 --locked
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        if: matrix.zig
+        with:
+          tool: cargo-zigbuild@0.23.4
+          checksum: true
+          fallback: none
       - name: Install musl target tools
         if: matrix.musl
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: msrv-${{ matrix.target }}-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build local candidate
-        run: scripts/build-release.sh '${{ matrix.target }}'
-      - name: Install and use the native archive
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: scripts/build-release.sh "$CANDIDATE_TARGET"
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-cyclonedx@0.5.9
+          checksum: true
+          fallback: none
+      - name: Build the wheel without installing it
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+          WHEEL_BUILD_ONLY: '1'
+        run: scripts/build-python-wheel.sh "$CANDIDATE_TARGET" "$RUNNER_TEMP/python-wheels"
+      - name: Stage and verify the complete target bundle
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
         run: |
-          archive=$(find dist/candidates -name "bionic-reader-v*-$CANDIDATE_TARGET.tar.gz" -type f)
-          test -n "$archive"
+          mkdir -p dist/bundle
+          cp dist/candidates/v*/bionic-reader-v*-"$CANDIDATE_TARGET".tar.gz dist/bundle/
+          cp "$RUNNER_TEMP"/python-wheels/*.whl dist/bundle/
+          scripts/generate-sbom.sh "$CANDIDATE_TARGET" dist/bundle
+          python3 scripts/candidate-checksums.py dist/bundle
+          python3 scripts/candidate-checksums.py dist/bundle --verify
+      - name: Install and use the verified archive and wheel
+        env:
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          python3 scripts/candidate-checksums.py dist/bundle --verify
           install_root="$RUNNER_TEMP/bionic-reader-archive"
           mkdir -p "$install_root"
-          tar -xzf "$archive" --strip-components=1 -C "$install_root"
+          tar -xzf dist/bundle/*.tar.gz --strip-components=1 -C "$install_root"
           python3 scripts/check-installed-cli.py "$install_root/bin/bionic-reader"
-      - name: Build target wheel and smoke-test matching hosts
-        run: scripts/build-python-wheel.sh '${{ matrix.target }}' "$RUNNER_TEMP/python-wheels"
+          scripts/check-python-wheel-install.sh "$CANDIDATE_TARGET" dist/bundle/*.whl
       - name: Build and install the README's host-local Python wheel
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
@@ -444,10 +512,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bionic-reader-${{ matrix.target }}
-          path: |
-            dist/candidates/v*/bionic-reader-v*-${{ matrix.target }}.tar.gz
-            dist/candidates/v*/SHA256SUMS
-            ${{ runner.temp }}/python-wheels/*.whl
+          path: dist/bundle/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -478,9 +543,21 @@ jobs:
           zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
           test -x "$zig_dir/zig"
           echo "$zig_dir" >> "$GITHUB_PATH"
-          cargo +stable install cargo-zigbuild --version 0.23.4 --locked
           go install -ldflags="-X main.version=2.47.0" github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-zigbuild@0.23.4
+          checksum: true
+          fallback: none
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: msrv-zig-package-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build signed-repository candidates and install in distro containers
         run: scripts/package-manager-install-smoke.sh
 
@@ -505,6 +582,14 @@ jobs:
           rustup default 1.85.1
       - name: Install fish
         run: brew install fish
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: msrv-shell-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Unit, CLI, PTY, and launcher tests on macOS Bash 3.2
         run: cargo test --locked --all-targets
       - name: Check generated completion files
@@ -518,14 +603,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          go-version: '1.25.8'
-          cache: false
-      - name: Install pinned actionlint
-        run: GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - name: Check workflow syntax, expressions, and inline shell scripts
-        run: '"$RUNNER_TEMP/actionlint-bin/actionlint" -color'
+          python-version: '3.13.17'
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: typos@1.51.1,zizmor@1.31.1,cargo-deny@0.20.2
+          checksum: true
+          fallback: none
+      - name: Install standalone linters and Python tools
+        run: |
+          scripts/install-workflow-tools.sh "$RUNNER_TEMP/workflow-tools"
+          echo "$RUNNER_TEMP/workflow-tools" >> "$GITHUB_PATH"
+          python -m pip install --disable-pip-version-check -r packaging/python/requirements-checks.txt
+      - name: Check workflows, spelling, local links, anchors and rejection cases
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          cargo fetch --locked
+          make workflow-check docs-check ci-policy-check ci-negative-check
 
   source-install:
     name: Source install and use (${{ matrix.runner }}, Rust ${{ matrix.toolchain }})
@@ -558,15 +654,16 @@ jobs:
           RUST_TOOLCHAIN: ${{ matrix.toolchain }}
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-          rustup default "$RUST_TOOLCHAIN"
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+          echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: matrix.runner != 'ubuntu-24.04' || matrix.toolchain != '1.85.1'
         with:
-          path: |
-            ~/.cargo/registry
-            target
-          key: source-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            source-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: source-${{ matrix.toolchain }}-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Compile and install from the checkout
         run: cargo install --path . --locked --root "$RUNNER_TEMP/bionic-reader-install"
       - name: Use the installed executable and reading session
@@ -579,3 +676,89 @@ jobs:
         run: scripts/check-cargo-git-install.sh
       - name: Package, install, and use the Cargo crate
         run: scripts/check-cargo-package.sh
+
+  glibc-runtime:
+    name: glibc 2.28 runtime (${{ matrix.target }})
+    needs: target-builds
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-${{ matrix.target }}
+          path: dist/bundle
+      - name: Verify the bundle before extracting or executing it
+        run: python3 scripts/candidate-checksums.py dist/bundle --verify
+      - name: Exercise the advertised GNU runtime minimum offline
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges             --read-only --tmpfs /tmp:rw,exec,nosuid,nodev             --volume "$PWD/dist/bundle:/bundle:ro"             --volume "$PWD/scripts/check-glibc-runtime.sh:/check.sh:ro"             debian:buster-slim@sha256:bb3dc79fddbca7e8903248ab916bb775c96ec61014b3d02b4f06043b604726dc             bash /check.sh /bundle
+
+  attest-candidates:
+    name: Attest main candidates (${{ matrix.target }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: target-builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin, x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      # No checkout or execution of candidate contents in this privileged job.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-${{ matrix.target }}
+          path: bundle
+      - name: Verify all artifact digests
+        working-directory: bundle
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Attest build provenance for the entire bundle
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: bundle/*
+      - name: Attest the target SBOM for the archive and wheel
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            bundle/*.tar.gz
+            bundle/*.whl
+          sbom-path: bundle/sbom.cdx.json
+      - name: Verify repository, workflow, commit and digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in bundle/*.tar.gz bundle/*.whl; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"               --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"               --source-digest "$GITHUB_SHA" --deny-self-hosted-runners               --predicate-type https://cyclonedx.org/bom
+          done
+
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs: [rust, coverage, rust-maintenance, miri, fuzz, homebrew-local, snap-local, node-local-macos, framework-loader-tests, distribution-static, target-builds, linux-package-install-smoke, macos-shell-tests, workflow-lint, source-install, glibc-runtime]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require every PR matrix job to succeed
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/check-ci-gate.py rust coverage rust-maintenance miri fuzz homebrew-local snap-local node-local-macos framework-loader-tests distribution-static target-builds linux-package-install-smoke macos-shell-tests workflow-lint source-install glibc-runtime

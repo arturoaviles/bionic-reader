@@ -108,43 +108,6 @@ python3 "$repo_root/scripts/check-python-wheel.py" "$staged_wheel"
 wheel="$output_dir/$(basename "$staged_wheel")"
 cp "$staged_wheel" "$wheel"
 
-if [[ $host != "$target" ]]; then
-  printf 'Built cross-target wheel %s; installation is checked only on an exact matching host (%s != %s)\n' \
-    "$wheel" "$host" "$target"
-  exit 0
+if [[ ${WHEEL_BUILD_ONLY:-0} != 1 ]]; then
+  "$repo_root/scripts/check-python-wheel-install.sh" "$target" "$wheel"
 fi
-
-command -v uv >/dev/null 2>&1 || {
-  printf 'uv is required for exact-host wheel installation checks\n' >&2
-  exit 69
-}
-
-temporary=$(mktemp -d)
-export PIP_CACHE_DIR="$temporary/pip-cache"
-export UV_CACHE_DIR="$temporary/uv-cache"
-verify_installed_binary() {
-  local executable=$1
-  [[ $("$executable" --version) == "bionic-reader $version" ]]
-  python3 "$repo_root/scripts/check-installed-cli.py" "$executable"
-  printf 'Installed executable checks passed: %s\n' "$executable"
-}
-python3 -m venv "$temporary/pip-env"
-"$temporary/pip-env/bin/python" -m pip install --no-index --no-deps --force-reinstall "$wheel"
-verify_installed_binary "$temporary/pip-env/bin/bionic-reader"
-"$temporary/pip-env/bin/python" -m pip uninstall --yes bionic-reader
-[[ ! -e $temporary/pip-env/bin/bionic-reader ]]
-
-export UV_TOOL_DIR="$temporary/uv-tools"
-export UV_TOOL_BIN_DIR="$temporary/uv-bin"
-uv venv "$temporary/uv-env"
-uv pip install --no-index --no-deps --find-links "$output_dir" \
-  --python "$temporary/uv-env/bin/python" "bionic-reader==$version"
-verify_installed_binary "$temporary/uv-env/bin/bionic-reader"
-uv pip uninstall --python "$temporary/uv-env/bin/python" bionic-reader
-[[ ! -e $temporary/uv-env/bin/bionic-reader ]]
-uv tool install --no-index --find-links "$output_dir" \
-  --python "$(command -v python3)" "bionic-reader==$version"
-verify_installed_binary "$UV_TOOL_BIN_DIR/bionic-reader"
-uv tool uninstall bionic-reader
-[[ ! -e $UV_TOOL_BIN_DIR/bionic-reader ]]
-printf 'Created wheel candidate %s\n' "$wheel"

@@ -1,0 +1,10 @@
+include_fragments = "anchor-only"
+exclude_private = true
+exclude_loopback = true
+exclude_link_local = true
+max_retries = 2
+retry_wait_time = 2
+timeout = 20
+max_concurrency = 8
+# Reserved documentation examples, never external resources to probe.
+exclude = ['^https?://[^/]*\.(invalid|test)([:/]|$)', '^https?://example\.(com|org)([:/]|$)']

@@ -37,3 +37,7 @@ cargo +nightly-2026-10-22 fuzz run byte_stream path/to/artifact
 
 Generated corpora, crash artifacts, and build outputs are ignored by Git.
 After fixing a finding, keep a minimized regression as an ordinary test.
+
+Local `make fuzz` and both CI campaigns generate the same curated seeds with `scripts/seed-fuzz-corpus.py`. PRs retain the 60-second pass; scheduled assurance runs a nightly 900-second AddressSanitizer campaign with the same 128 KiB maximum input and ten-second input timeout. The scheduled workflow preserves the corpus, crash inputs and a reproduction command for 14 days. This is ASan fuzzing; it does not establish thread-sanitizer coverage.
+
+The private harness has MIT package metadata. Its pinned `libfuzzer-sys` 0.4.10 declares `(MIT OR Apache-2.0) AND NCSA`; `deny.toml` contains an explicitly approved, exact-version NCSA exception. Other crates and future libfuzzer-sys versions do not inherit it.

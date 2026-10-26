@@ -1,0 +1,35 @@
+{
+  "id": 25737761,
+  "name": "main protection",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "arturoaviles/bionic-reader",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5VQuWwzgGIuiE",
+  "created_at": "2026-10-23T10:36:40.997-06:00",
+  "updated_at": "2026-10-23T10:36:50.662-06:00",
+  "bypass_actors": [],
+  "current_user_can_bypass": "never",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/arturoaviles/bionic-reader/rulesets/25737761"
+    },
+    "html": {
+      "href": "https://github.com/arturoaviles/bionic-reader/rules/25737761"
+    }
+  }
+}

@@ -59,7 +59,7 @@ test-doc: ## Run Rustdoc examples.
 doc: ## Build API documentation with warnings denied.
 	RUSTDOCFLAGS="$(RUSTDOCFLAGS) -D warnings" $(CARGO) doc --locked --no-deps
 
-verify: fmt-check check lint test test-doc doc completions-check static ## Run Rust and distribution source checks.
+verify: fmt-check check lint test test-doc doc completions-check static workflow-check docs-check ci-policy-check ## Run Rust, distribution, and fast offline CI checks.
 
 static: ## Check shell/Python/Node/package sources (requires distribution tools).
 	scripts/check-distribution.sh
@@ -82,14 +82,49 @@ frameworks: ## Fetch and test all seven pinned upstream shell frameworks.
 	scripts/check-frameworks.sh
 
 fuzz: ## Run the pinned nightly sanitizer fuzzer for 60 seconds.
+	$(PYTHON) scripts/seed-fuzz-corpus.py
 	$(CARGO) +$(NIGHTLY) fuzz run byte_stream -- -max_total_time=60 -max_len=131072 -timeout=10
 
 bench: ## Run the transformer benchmarks.
 	$(CARGO) bench --locked --bench transformer
 
 audit: ## Check dependency advisories with the installed cargo-audit.
-	$(CARGO) audit
-	$(CARGO) audit --file fuzz/Cargo.lock
+	$(CARGO) audit --deny warnings
+	$(CARGO) audit --file fuzz/Cargo.lock --deny warnings
+
+.PHONY: workflow-check docs-check docs-links deny sbom performance-report mutation-report ci-policy-check ci-negative-check
+
+workflow-check: ## Lint YAML and workflow syntax/security (offline).
+	actionlint -color
+	yamllint -s .github .yamllint.yml
+	zizmor --offline --format github .github/workflows
+
+docs-check: ## Check tracked spelling and local Markdown links/anchors offline.
+	git ls-files -z | xargs -0 typos --force-exclude
+	scripts/check-docs.sh --offline
+
+docs-links: ## Check tracked Markdown external links with bounded retries.
+	scripts/check-docs.sh --external
+
+ci-policy-check: ## Check toolchain/gate consistency and CI failure-path regressions.
+	$(PYTHON) scripts/check-ci-policy.py
+	$(PYTHON) -m unittest discover -s scripts/tests -v
+
+ci-negative-check: ## Prove security, license, YAML and link tools reject invalid inputs.
+	$(PYTHON) scripts/check-ci-negative.py
+
+deny: ## Enforce license, source and version policies in both locked graphs.
+	$(CARGO) deny --locked --config deny.toml check licenses bans sources
+	$(CARGO) deny --manifest-path fuzz/Cargo.toml --locked --config deny.toml check licenses bans sources
+
+sbom: ## Generate a target-specific binary SBOM; pass TARGET=target-triple.
+	scripts/generate-sbom.sh "$(TARGET)" "$(CARGO_TARGET_DIR)/sbom/$(TARGET)"
+
+performance-report: ## Record Divan, startup and binary-size measurements (advisory).
+	scripts/performance-report.sh "$(CARGO_TARGET_DIR)/performance"
+
+mutation-report: ## Run two mutation workers for up to 45 minutes; pass MODULE=settings|segmentation|transformer.
+	$(PYTHON) scripts/mutation-report.py "$(MODULE)" --output "$(CARGO_TARGET_DIR)/mutations"
 
 package: ## Verify/install/test/uninstall a Cargo archive from a clean checkout.
 	scripts/check-cargo-package.sh

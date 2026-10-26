@@ -16,7 +16,7 @@ make run ARGS='--style always -t "Reading documentation"'
 make release
 ```
 
-`make verify` runs formatting, type checking, Clippy, all Rust tests, Rustdoc tests/documentation, completion drift checks, and distribution source checks. Formatting, type checking, and linting include the separate fuzz workspace. `make test-e2e` runs executable, reader, reading-session, terminal, and completion workflows. `make test-unit` runs library and CLI unit tests. `scripts/check-quality.sh` invokes `make verify` and also audits both lockfiles if cargo-audit is installed.
+`make verify` runs formatting, type checking, Clippy, all Rust tests, Rustdoc tests/documentation, completion drift checks, distribution source checks, workflow/YAML/security lint, tracked spelling, local Markdown links/anchors, and CI gate/toolchain consistency. Formatting, type checking, and linting include the separate fuzz workspace. `make test-e2e` runs executable, reader, reading-session, terminal, and completion workflows. `make test-unit` runs library and CLI unit tests. `scripts/check-quality.sh` invokes `make verify` and also audits both lockfiles if cargo-audit is installed.
 
 `make install` installs this checkout into Cargo's configured installation root; `make uninstall` removes that Cargo installation. `make smoke` checks the built executable and a real terminal session. Use `make completions` after changing CLI arguments to regenerate all three checked-in completion files, then run `make completions-check`.
 
@@ -38,7 +38,7 @@ scripts/check-completions.sh "${CARGO_TARGET_DIR:-target}/debug/bionic-reader"
 scripts/check-distribution.sh
 ```
 
-The test suite includes unit, property, CLI, document, and PTY/reader/session coverage. Terminal tests need Bash, Zsh, and fish; Node.js is needed for launcher tests. Distribution checks also require ShellCheck, Python 3, Ruff, mypy, and Ruby. Checking the fuzz workspace requires a C++ compiler. For dependency advisories, install the pinned `cargo-audit` version listed by CI and run `make audit` when its advisory database is reachable. A missing tool is a local environment setup issue; CI installs the required checkers explicitly.
+The test suite includes unit, property, CLI, document, and PTY/reader/session coverage. Terminal tests need Bash, Zsh, and fish; Node.js is needed for launcher tests. Distribution checks also require ShellCheck, Python 3, Ruff, mypy, and Ruby. Checking the fuzz workspace requires a C++ compiler. For dependency advisories, install the pinned `cargo-audit` version listed by CI and run `make audit` when its advisory database is reachable. A missing tool is a local environment setup issue; CI installs the required checkers explicitly. See [CI tools and rollout](docs/ci/README.md) for new checker versions, installation, policy exceptions, candidate verification and merge enforcement.
 
 CI runs each generated property with `PROPTEST_CASES=4096`. The local Proptest default is 256; use `PROPTEST_CASES=4096 make test` for the same case count. The test configuration honors this environment variable.
 
@@ -70,7 +70,7 @@ Open `target/coverage/html/index.html`, or the equivalent path under `CARGO_TARG
 
 Clean the instrumented workspace after source changes before taking a fresh measurement; stale object files can distort the report. CI uploads HTML, JSON, LCOV, and uncovered-line artifacts and compares the measurements with the requested 100% target. Current results and remaining gaps are recorded in [docs/verification.md](docs/verification.md). Passing the transitional coverage floors does not mean the target has been reached.
 
-For sanitizer fuzzing, install `cargo +nightly-2026-10-22 install cargo-fuzz --version 0.13.2 --locked`, then run `make fuzz`. It uses a 60-second campaign, a 128 KiB maximum input, and a ten-second per-input timeout, matching CI. See [fuzz/README.md](fuzz/README.md) for reproduction and regression-case instructions. `make bench` runs the transformer benchmarks.
+For sanitizer fuzzing, install `cargo +nightly-2026-10-22 install cargo-fuzz --version 0.13.2 --locked`, then run `make fuzz`. It uses a 60-second campaign, a 128 KiB maximum input, and a ten-second per-input timeout, matching CI. See [fuzz/README.md](fuzz/README.md) for reproduction and regression-case instructions. `make bench` runs the transformer benchmarks. Local and CI fuzz runs share `scripts/seed-fuzz-corpus.py`; a separate nightly ASan campaign runs for 15 minutes.
 
 ## Additional Rust verification and benchmarks
 
@@ -86,7 +86,7 @@ cargo bench --locked --bench transformer
 
 Install Miri and rust-src with `rustup toolchain install nightly-2026-10-22 --profile minimal --component miri --component rust-src`. Install the pinned maintenance tools with `cargo +nightly-2026-10-22 install cargo-hack --version 0.6.45 --locked` and the equivalent command for cargo-udeps 0.1.61. The Miri commands interpret specific pure byte-stream cases; real terminal/process operations remain covered by native integration tests.
 
-The Divan benchmark reports bytes per second and allocations for ASCII, Unicode with existing ANSI styles, punctuation, and passthrough at three chunk sizes. Its profiling allocator applies only to the benchmark executable. Compare changes on the same idle machine with the same compiler and settings; allocation profiling affects timings. CI compiles and smoke-executes all benchmark cases through `cargo test --all-targets`, without enforcing machine-dependent timing thresholds.
+The Divan benchmark reports bytes per second and allocations for ASCII, Unicode with existing ANSI styles, punctuation, and passthrough at three chunk sizes. Its profiling allocator applies only to the benchmark executable. Compare changes on the same idle machine with the same compiler and settings; allocation profiling affects timings. CI compiles and smoke-executes all benchmark cases through `cargo test --all-targets`. Weekly reports measure throughput, allocations, startup and binary size without timing regression thresholds.
 
 ## Build, install, and use checks
 
@@ -104,7 +104,7 @@ rm -rf "$install_root"
 
 The checker requires Python 3.9 or newer and `/bin/bash`. It isolates HOME and XDG configuration and verifies text/stdin behavior, ANSI output, configuration precedence, shell initialization and completions, session controls, and a real PTY reading session. Pass the actual installed binary path; the checker does not substitute a build-tree executable.
 
-Workflow changes are checked with [actionlint](https://github.com/rhysd/actionlint) 1.7.12, including GitHub expression contexts and inline shell scripts. Run `actionlint` locally when editing `.github/workflows/`. Actions are pinned to verified commit SHAs. CI has read-only repository permissions, timeouts, and cancellation of superseded runs. The separate dependency-security workflow runs Cargo audit on dependency changes, weekly after merge, and on manual dispatch.
+Workflow changes are checked with [actionlint](https://github.com/rhysd/actionlint) 1.7.12, including GitHub expression contexts and inline shell scripts. Run `actionlint` locally when editing `.github/workflows/`. Actions are pinned to verified commit SHAs. Build and PR jobs use read-only repository permissions, timeouts, and cancellation of superseded runs. CodeQL has only the additional security-events permission. Main-push candidate attestation has a separate job with narrowly scoped write permissions. The separate dependency-security workflow audits both lockfiles on every PR and main push, daily, and on manual dispatch. It also enforces dependency policy. Dependency Review runs on every PR; CodeQL analyzes Rust, Python, and JavaScript/TypeScript on PRs, main pushes, and weekly.
 
 ## Secret scanning
 
@@ -200,3 +200,20 @@ The README documents a current-checkout route for every requested package manage
 - The seven pinned framework-loader tests start fresh interactive shells, require automatic activation of exactly one reading session, and check emphasized command output. In fish, initialization uses `eval (bionic-reader init fish | string collect)` so a sourced pipeline does not replace the terminal input needed by the session.
 
 To run the local routes, follow the commands in [README.md](README.md). Homebrew and Snap checks make actual package-manager installations and remove their own test installations; their helpers refuse to replace existing test formula/Snap installations.
+
+## CI policy and scheduled reports
+
+The local `rust-toolchain.toml` selects Rust 1.85.1 with rustfmt and Clippy. Use explicit `cargo +stable` or `cargo +nightly-2026-10-22` for other compilers; `rustup default` does not override the project file. `RUSTUP_TOOLCHAIN` is appropriate when a script invokes Cargo internally.
+
+```sh
+make workflow-check docs-check ci-policy-check # fast offline checks
+make ci-negative-check                       # deliberate invalid inputs
+make deny                                    # both dependency graphs
+make sbom TARGET=aarch64-apple-darwin
+make performance-report                      # advisory measurements
+make mutation-report MODULE=segmentation      # two workers, 45 minutes
+```
+
+Weekly mutation campaigns cover settings, segmentation and the transformer. Surviving mutants and mutant timeouts remain advisory; failing baselines, invalid output and tool errors fail. Scheduled diagnostics have 14-day retention. Existing coverage floors (92% lines, 91% regions, 88% functions, 80% branches), memory limits and scan-work assertions remain mandatory. The 100% coverage target remains open.
+
+Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Windows and registry/release publication remain separate work.

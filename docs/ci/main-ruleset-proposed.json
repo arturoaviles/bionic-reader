@@ -1,0 +1,85 @@
+{
+  "name": "main protection",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/heads/main"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "CI gate",
+            "integration_id": 15368
+          },
+          {
+            "context": "Dependency advisory audit",
+            "integration_id": 15368
+          },
+          {
+            "context": "Dependency policy",
+            "integration_id": 15368
+          },
+          {
+            "context": "Dependency Review",
+            "integration_id": 15368
+          },
+          {
+            "context": "Gitleaks secret scan",
+            "integration_id": 15368
+          },
+          {
+            "context": "CodeQL (rust)",
+            "integration_id": 15368
+          },
+          {
+            "context": "CodeQL (python)",
+            "integration_id": 15368
+          },
+          {
+            "context": "CodeQL (javascript-typescript)",
+            "integration_id": 15368
+          }
+        ]
+      }
+    },
+    {
+      "type": "code_scanning",
+      "parameters": {
+        "code_scanning_tools": [
+          {
+            "tool": "CodeQL",
+            "security_alerts_threshold": "high_or_higher",
+            "alerts_threshold": "none"
+          }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": []
+}

@@ -116,3 +116,45 @@ CI publishes the actual measurements and the open 100% target in its job summary
 Reader view buffers are bounded, including a 4 KiB oversized-grapheme display fallback; the line-position index grows with the number of lines. Markdown streaming spools to disk and uses bounded blocks/reference data with documented literal fallbacks. Plain/terminal processing retains malformed ordinary bytes outside removed controls; Unicode document conversion rejects malformed UTF-8, while the reader displays replacement characters. These policies do not promise perfect linguistic analysis or a reading-speed improvement.
 
 Use `make help` for common commands and [CONTRIBUTING.md](../CONTRIBUTING.md) for tool versions, coverage reproduction, fuzzing, and installation checks. The Makefile's core checks are exercised by CI. Both application and fuzz-workspace lockfiles are audited. [The current PR matrix](https://github.com/arturoaviles/bionic-reader/pull/2/checks) records results for each pushed revision; newer changes do not inherit earlier passing results. Registry publication, hosted repository distribution, minimum-OS validation, upgrades, and Snap Store approval remain release gates.
+
+## Targeted CI assurance (2026-10-26)
+
+The PR matrix and all 11 installation routes are retained. New workflow checks
+cover spelling, YAML duplicates, local Markdown anchors/links and workflow
+security. Dependency policy covers both locked graphs and all supported targets;
+Dependency Review and Rust/Python/JavaScript CodeQL are configured for every PR.
+RustSec runs daily, external links and mutation/performance reports weekly, and
+ASan fuzzing nightly for 15 minutes alongside the existing 60-second PR pass.
+
+Local validation on macOS ARM64 with Rust 1.85.1 passed `make verify`, including
+all existing Rust suites, five Rustdoc examples, 4,096-case properties, completion
+drift, distribution checks and the new offline checks. Seven CI gate/checksum
+regressions passed. Freshly fetched application/fuzz graphs passed cargo-deny;
+expected duplicate-version and unused-license-allowance warnings remain. The
+approved NCSA exception is limited to libfuzzer-sys 0.4.10. Deliberately invalid
+license/source/link/YAML/workflow inputs were rejected; the exception also rejects
+NCSA for libfuzzer-sys 0.4.11. The rollout helper refused the old passing commit
+because the new check contexts had not registered, leaving rules unchanged.
+
+A native ARM64 archive/wheel/SBOM bundle passed complete-manifest SHA-256
+verification and pip/uv pip/uv tool installation, CLI/PTY use and removal. The
+CycloneDX 1.5 binary SBOM contains 85 components and excludes divan/proptest.
+Divan and hyperfine reports completed; the local binary measured 4,820,368 bytes
+and startup averaged approximately 1.9 ms over 30 runs. These are single-host
+advisory measurements, not regression thresholds. A five-minute segmentation
+mutation smoke completed its baseline, found survivors and mutant timeouts,
+and preserved its partial outcomes when the campaign budget expired. The full
+45-minute-per-module weekly reports still require their first scheduled run.
+
+The current main ruleset was snapshotted. Required-check enforcement and CodeQL
+alert blocking are prepared with a guarded rollout helper; activation requires
+successful new PR contexts, matching workflows on main, a successful main CI run
+including candidate attestations, and a fresh ruleset snapshot. See [the rollout
+record and commands](ci/README.md). Main-push attestation verification, fork and
+Dependabot execution, the complete remote matrix and initial scheduled reports
+must be recorded for the new revision before claiming rollout completion.
+The new offline glibc 2.28 smoke also passed against the checksum-verified
+same-source Linux ARM64 candidate from GitHub run 40131670249. The container
+requires an explicitly executable temporary extraction mount; the workflow now
+sets it. Native x86-64 execution remains part of the remote matrix. macOS 11
+runtime validation and registry/release publication remain release work.
