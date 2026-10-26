@@ -10,10 +10,10 @@ readme = "README.md"
 keywords = ["bionic-reading", "cli", "terminal", "text"]
 categories = ["command-line-utilities", "text-processing"]
 include = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "README.md",
-    "LICENSE",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
     "src/**",
     "benches/**",
     "tests/**",

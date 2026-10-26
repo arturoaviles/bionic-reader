@@ -167,6 +167,8 @@ jobs:
           retention-days: 14
 
   rust-maintenance:
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-22
     name: Rust feature and dependency checks
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -177,7 +179,7 @@ jobs:
       - name: Install pinned verification toolchain and tools
         run: |
           rustup toolchain install nightly-2026-10-22 --profile minimal
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-hack@0.6.45,cargo-udeps@0.1.61
@@ -197,6 +199,8 @@ jobs:
         run: cargo +nightly-2026-10-22 udeps --locked --all-targets --all-features
 
   miri:
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-22
     name: Miri byte-stream checks
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -221,6 +225,8 @@ jobs:
           cargo +nightly-2026-10-22 miri test --locked --lib transformer::tests::malformed_bytes_are_preserved_while_surrounding_words_transform -- --exact
 
   fuzz:
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-22
     name: Unicode, ANSI, and document fuzz regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -280,7 +286,7 @@ jobs:
           echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -301,7 +307,7 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
       - name: Prepare snapd and the pinned Snapcraft builder
         run: |
@@ -332,7 +338,7 @@ jobs:
       - name: Install build tools
         # zizmor: ignore[adhoc-packages] Corepack is pinned; lifecycle scripts and lockfile writes are disabled.
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
           npm install --prefix "$RUNNER_TEMP/node-tools" --ignore-scripts --no-save --no-audit --no-fund --package-lock=false corepack@0.36.0
           echo "$RUNNER_TEMP/node-tools/node_modules/.bin" >> "$GITHUB_PATH"
@@ -362,7 +368,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes fish zsh
       - name: Install Rust toolchain and fetch locked dependencies
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
           cargo fetch --locked
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -437,7 +443,7 @@ jobs:
           python-version: '3.13.17'
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
       - name: Install pinned Python packaging tools
         run: python3 -m pip install --disable-pip-version-check maturin==1.15.0 uv==0.13.5
@@ -534,7 +540,7 @@ jobs:
           cache: false
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
           rustup toolchain install stable --profile minimal
       - name: Install pinned candidate build tools
@@ -578,7 +584,7 @@ jobs:
           node-version: '24.11.1'
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.85.1 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.85.1
       - name: Install fish
         run: brew install fish
@@ -653,7 +659,7 @@ jobs:
         env:
           RUST_TOOLCHAIN: ${{ matrix.toolchain }}
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
           echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: matrix.runner != 'ubuntu-24.04' || matrix.toolchain != '1.85.1'

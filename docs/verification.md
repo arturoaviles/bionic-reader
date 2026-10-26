@@ -158,3 +158,13 @@ same-source Linux ARM64 candidate from GitHub run 40131670249. The container
 requires an explicitly executable temporary extraction mount; the workflow now
 sets it. Native x86-64 execution remains part of the remote matrix. macOS 11
 runtime validation and registry/release publication remain release work.
+
+The first new PR run (40278345339) registered the new checks and exposed three
+integration defects: Linux lychee archives use a directory prefix, rust-cache's
+concurrent compiler probes could race rustup's automatic component installation,
+and Cargo's unanchored `README.md` include pattern also matched the new CI README.
+The fixes extract the exact verified archive member, install declared components
+before cache probes/select nightly explicitly, and anchor root Cargo package
+support files. Dependency Review, both dependency policies/audits, Gitleaks and
+all three CodeQL languages passed on that first revision. Subsequent matrix
+results must be checked at the latest commit.

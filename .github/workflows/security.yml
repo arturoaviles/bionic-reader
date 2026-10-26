@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the project compiler
-        run: rustup toolchain install 1.85.1 --profile minimal
+        run: rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-deny@0.20.2
