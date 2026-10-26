@@ -1,0 +1,19 @@
+# Bionic Reader reads this file from $XDG_CONFIG_HOME/bionic-reader/config.toml
+# or ~/.config/bionic-reader/config.toml.
+fraction = 0.5
+every = 1
+min_word_length = 2
+style = "auto"
+
+# These names are appended to the built-in safety exclusions.
+exclude_commands = ["my-pager"]
+
+# Optional document/reader preferences:
+# profile = "balanced" # subtle, balanced, strong; explicit values above take precedence
+# emphasis = "bold" # bold, underline, reverse
+# input_format = "text" # text, markdown, terminal (trusted controls)
+# format = "ansi" # ansi, plain, markdown, html
+# controls = "safe" # safe, preserve
+# skip_code = true
+# low_latency = false
+# length_rules = [{ max_length = 4, fraction = 0.25 }, { max_length = 8, fraction = 0.5 }]

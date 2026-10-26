@@ -1,0 +1,6 @@
+Types: deb
+URIs: @REPOSITORY_URL@
+Suites: @SUITE@
+Components: main
+Architectures: @ARCHITECTURES@
+Signed-By: /usr/share/keyrings/bionic-reader-archive-keyring.gpg

@@ -1,0 +1,181 @@
+name: Scheduled assurance
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+    - cron: '53 7 * * 1'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Assurance suite
+        type: choice
+        options: [all, fuzz, weekly]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.schedule || inputs.suite }}
+  cancel-in-progress: false
+
+env:
+  RUSTUP_TOOLCHAIN: nightly-2026-10-22
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Nightly 15-minute ASan campaign
+    if: github.event.schedule == '23 3 * * *' || inputs.suite == 'all' || inputs.suite == 'fuzz'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain and source-only fuzz driver
+        run: |
+          rustup toolchain install nightly-2026-10-22 --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+          key: scheduled-nightly-asan-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
+      - name: Generate shared regressions and fuzz with AddressSanitizer
+        run: |
+          python3 scripts/seed-fuzz-corpus.py
+          mkdir -p fuzz/artifacts
+          printf '%s\n' 'cargo +nightly-2026-10-22 fuzz run byte_stream fuzz/artifacts/byte_stream/INPUT' > fuzz/artifacts/REPRODUCE.txt
+          cargo fuzz run byte_stream --sanitizer address -- -max_total_time=900 -max_len=131072 -timeout=10
+      - name: Publish fuzz diagnostics
+        if: always()
+        run: |
+          printf '### ASan campaign\n\n15-minute campaign; result: %s. Corpus, crash inputs and reproduction command are attached.\n' "$JOB_STATUS" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          JOB_STATUS: ${{ job.status }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: nightly-fuzz-diagnostics
+          path: |
+            fuzz/corpus/
+            fuzz/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  mutation:
+    name: Mutation report (${{ matrix.module }})
+    env:
+      RUSTUP_TOOLCHAIN: '1.85.1'
+    if: github.event.schedule == '53 7 * * 1' || inputs.suite == 'all' || inputs.suite == 'weekly'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [settings, segmentation, transformer]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install project toolchain
+        run: rustup toolchain install 1.85.1 --profile minimal
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-mutants@27.1.0
+          checksum: true
+          fallback: none
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: mutation-msrv-${{ matrix.module }}-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
+      - name: Run bounded advisory campaign
+        env:
+          RUSTUP_TOOLCHAIN: '1.85.1'
+          MUTATION_MODULE: ${{ matrix.module }}
+        run: make mutation-report MODULE="$MUTATION_MODULE"
+      - name: Publish mutation summary
+        if: always()
+        env:
+          MUTATION_MODULE: ${{ matrix.module }}
+        run: |
+          report="target/mutations/$MUTATION_MODULE/summary.md"
+          if [[ -f $report ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutation-${{ matrix.module }}
+          path: target/mutations/
+          if-no-files-found: warn
+          retention-days: 14
+
+  performance:
+    name: Advisory performance measurements
+    if: github.event.schedule == '53 7 * * 1' || inputs.suite == 'all' || inputs.suite == 'weekly'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: '1.85.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install project compiler
+        run: rustup toolchain install 1.85.1 --profile minimal
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: hyperfine@2.0.0
+          checksum: true
+          fallback: none
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: performance-msrv-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
+      - run: make performance-report
+      - name: Publish measurement summary
+        run: |
+          {
+            cat target/performance/environment.txt target/performance/startup.md
+            printf '\n```text\n'
+            cat target/performance/divan.txt
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: performance-measurements
+          path: target/performance/
+          if-no-files-found: warn
+          retention-days: 14
+
+  external-links:
+    name: Weekly external documentation links
+    if: github.event.schedule == '53 7 * * 1' || inputs.suite == 'all' || inputs.suite == 'weekly'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checksum-verified link checker
+        run: |
+          scripts/install-workflow-tools.sh "$RUNNER_TEMP/workflow-tools"
+          echo "$RUNNER_TEMP/workflow-tools" >> "$GITHUB_PATH"
+      - name: Check external links with bounded retries
+        run: |
+          mkdir -p target/links
+          make docs-links 2>&1 | tee target/links/report.txt
+      - name: Publish link summary
+        if: always()
+        run: |
+          if [[ -f target/links/report.txt ]]; then cat target/links/report.txt >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: external-links
+          path: target/links/
+          if-no-files-found: warn
+          retention-days: 14

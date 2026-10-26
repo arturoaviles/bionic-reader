@@ -1,0 +1,23 @@
+[package]
+name = "bionic-reader-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.10"
+bionic-reader = { path = ".." }
+
+[[bin]]
+name = "byte_stream"
+path = "fuzz_targets/byte_stream.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

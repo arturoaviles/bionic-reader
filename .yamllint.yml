@@ -1,0 +1,11 @@
+extends: default
+rules:
+  document-start: disable
+  line-length: disable
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: false # GitHub Actions uses the YAML 1.2 key `on`.
+  comments:
+    min-spaces-from-content: 1
+  braces:
+    max-spaces-inside: 1

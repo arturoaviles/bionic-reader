@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "bionic-reader"
+dynamic = ["version"]
+description = "Local word-prefix emphasis for text streams and terminal sessions"
+readme = "../../README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [{ name = "arturoaviles and contributors" }]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Rust",
+  "Topic :: Text Processing",
+]
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "../../Cargo.toml"
+locked = true
+profile = "release"
+strip = true
+data = "bionic_reader.data"

@@ -1,0 +1,44 @@
+# Rust style
+
+This project follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html), reviewed on 2026-10-23, and [Microsoft’s Pragmatic Rust Guidelines 2026.6](https://microsoft.github.io/rust-guidelines/guidelines/index.html), reviewed on the same date, together with the [Rust style guide](https://doc.rust-lang.org/style-guide/) and [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/). Apply the Google guide's application-code guidance: this crate implements one CLI and its terminal engine. Keep changes direct and preserve the command-line and byte-stream contracts in [design.md](design.md).
+
+## Code and API conventions
+
+- Keep the crate root declarative. Name a leaf module for its primary abstraction: `settings` contains `Settings`, and `transformer` contains `Transformer`. Session and shell modules contain related operations rather than one primary type.
+- Import items from one module per `use` statement. Import types by name, qualify external free functions with their module, and scope trait imports to the function when they are used there alone. Qualified names such as `io::Error` and POSIX `libc` types are acceptable where they clarify a family of related types. Inline tests may use `super::*`.
+- Use stable Rust and the checked-in rustfmt configuration: edition 2024 and a 100-column limit. Keep hexadecimal literals lowercase and escape invisible characters in literals. Do not skip formatting for personal preferences.
+- Prefer borrowing and unique ownership. Use flexible borrowed inputs such as `&str`, `&Path`, and slices. Avoid deep clones that only work around a borrow. Do not introduce generic `Into` parameters, traits, or macros merely to organize application code.
+- Make boolean arguments understandable from their names or a call-site comment; use an enum when the distinction needs a domain name. Prefer named fields for values that travel beyond a small local context. Use standard trait names, derives, and `Default` for options structs.
+- Document public contracts, configuration precedence, byte preservation, errors, and any input-dependent panics. Include useful examples. Mark pure functions and values whose results must be consumed with `#[must_use]`. Match optional data directly instead of checking and then unwrapping it. Use `expect` only for invariants, with a message explaining the assumption; tests also need useful failure messages.
+- Keep recoverable failures in `Result`, including I/O and configuration failures. Public fallible operations return the canonical `Error` struct, which implements `std::error::Error`, retains source errors and a diagnostic backtrace, and exposes input/I/O classification. Add context without replacing the original cause. Use `Transformer::try_new` for untrusted settings; the infallible constructor checks its programming contract immediately. Never recover access to a poisoned mutex's contents. Keep unsafe operations behind safe functions, with a `SAFETY:` comment and an explanation of why a safe equivalent is unavailable.
+- Use descriptive names, explicit types where inference obscures an operation, and straightforward loops when iterator chains obscure control flow. Bind iterator chains before using them in a `for` header. Add assertion context when it explains a failure rather than repeating its condition.
+- Avoid unstable features, hidden dependency APIs, work before `main`, custom operator meanings, and `catch_unwind`. Add expected API pairs together, such as `len` and `is_empty`, when introducing them.
+
+## Application-specific decisions
+
+Google's guide explicitly permits contextual choices. The following apply here:
+
+- Chromium build rules, flat GN source layouts, `chromium::import!`, Chromium task sequences, Fuchsia mutexes, and their test frameworks apply to those platforms. This project uses Cargo, standard Rust threads and mutexes, and `#[test]`. It retains the PTY architecture required by [ADR 0001](adr/0001-session-wide-terminal-transformation.md).
+- The session's worker threads and main loop share runtime settings and stop flags through `Arc`. Shared ownership keeps those lifetimes explicit without unsafe borrowed thread state. Exclusive data remains locally owned.
+- Byte-processing functions construct owned output buffers, so returning `Vec<u8>` is intentional. Callers immediately write or inspect those bytes. Application helpers may accept slices when no iterator flexibility is needed.
+- `Style::{Auto, Always, Never}` is the complete, fixed emission policy and remains exhaustive. `Settings` and `Overrides` intentionally support struct update syntax with `Default`; they use the guide's explicit exception to `#[non_exhaustive]` for options structs.
+- Clap and Serde derives implement their established command-line and configuration contracts. There is no project-specific macro language. The completion generator's replacement of a generated Bash registration name operates on generated output, rather than substituting values into a hand-written format string.
+- Stable Rust 1.85.1 remains the minimum compiler. Nightly-only rustfmt options and compiler lints are not enabled. Review checks import grouping, literal case, and other guidance that stable rustfmt cannot enforce.
+
+## Enforcement
+
+The Cargo manifest denies missing public documentation and debug implementations, ignored results, unsafe operations outside explicit unsafe blocks, undocumented unsafe blocks, bare unwraps, glob imports, missing error/panic documentation, and missing `must_use` annotations on public candidates. All major stable Clippy groups, including `pedantic` and `cargo`, and Microsoft's recommended restriction lints run with warnings denied. Local exceptions use `#[expect(..., reason = "...")]`; do not blanket-disable a group. Numeric conversions use checked conversions, with a documented exception for the bounded word-length/fraction calculation. `clippy.toml` lists only unavoidable duplicate transitive crates required by incompatible upstream dependency versions.
+
+CI also checks formatting, builds documentation with warnings denied, executes documentation examples, and runs unit, CLI, terminal, installation, and framework tests. See [CONTRIBUTING.md](../CONTRIBUTING.md) for commands. These tools cover mechanical rules; review must still assess ownership, naming, API design, unsafe justification, and readability.
+
+## Microsoft guideline application
+
+Microsoft's golden rule calls for applying the motivation of each recommendation to the project. In addition to the conventions above:
+
+- Workers and live child processes have owning cleanup guards. Shutdown drops the bounded output receiver before joining its producer, closes signal iterators, and kills/reaps a child on startup failure. Control sockets have finite read/write timeouts. Configuration reloads perform file I/O and parsing before briefly locking runtime state to commit valid settings.
+- `Settings` and `Overrides` offer both `new` and `Default`, and configuration types derive meaningful common traits. Types containing floating-point settings deliberately implement `PartialEq`, without promising `Eq` or `Hash` for NaN values.
+- The transformer is the performance-sensitive component. `benches/transformer.rs` measures throughput and allocation behavior for ASCII, mixed Unicode/ANSI, punctuation, and passthrough at 1-, 64-, and 8192-byte chunk sizes. Benchmark profiles retain debug symbols. Reserve output space from actual emphasized spans; profile before changing tokenization or allocation strategy.
+- The binary retains the system allocator. A Rust 1.85.1 release-build comparison on macOS ARM64 found mimalloc 0.1.52 used about 10% more CPU for the ASCII fixture and was within 1% for the mixed Unicode/ANSI fixture (20 alternating-order measured runs after four warmups). This does not justify a C build dependency across the six distribution targets; re-evaluate with platform-specific profiles if workloads change. Allocator choice belongs in the binary; the library must not install a global allocator.
+- Release artifacts retain a portable CPU baseline. `target-cpu=native` is appropriate for a known deployment fleet, while these archives run on other users' machines.
+- CLI stdout is transformed user data and stderr carries actionable diagnostics. Structured service telemetry would change that interface and is not added. Async runtimes, DLL ABI rules, service spans, and custom macro contracts do not apply to this synchronous POSIX CLI. A workspace is unnecessary for a single crate.
+- Feature combinations are checked on the minimum compiler with cargo-hack. A pinned nightly runs cargo-udeps and selected Miri byte-stream regressions. Native PTY, signal, shell, and installation tests cover OS behavior that Miri does not model; a focused Miri pass is not a claim to have interpreted the entire session engine.

@@ -1,0 +1,595 @@
+#compdef bionic-reader
+
+autoload -U is-at-least
+
+_bionic-reader() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-t+[Transform this text instead of reading stdin]:TEXT:_default' \
+'--text=[Transform this text instead of reading stdin]:TEXT:_default' \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_bionic-reader_commands" \
+"*::: :->bionic-reader" \
+&& ret=0
+    case $state in
+    (bionic-reader)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bionic-reader-command-$line[1]:"
+        case $line[1] in
+            (read)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::file -- File to read; omit it or use - to consume piped stdin:_files' \
+&& ret=0
+;;
+(preview)
+_arguments "${_arguments_options[@]}" : \
+'--text=[Passage for the interactive preview]:TEXT:_default' \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'--print[Print the preview instead of opening the interactive reader]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(session)
+_arguments "${_arguments_options[@]}" : \
+'--shell=[Bash, Zsh, or fish executable (defaults to SHELL)]:SHELL:_default' \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':shell:(bash zsh fish)' \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':shell:(bash zsh fish)' \
+&& ret=0
+;;
+(on)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(off)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(toggle)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(reload)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(bypass)
+_arguments "${_arguments_options[@]}" : \
+'--fraction=[Fraction of each selected word to emphasize (0 through 1)]:FRACTION:_default' \
+'--every=[Emphasize the first eligible word and then every Nth word]:EVERY:_default' \
+'--min-word-length=[Minimum number of letters a word must have to receive emphasis]:MIN_WORD_LENGTH:_default' \
+'--style=[When to apply emphasis\: automatically for terminals, always, or never]:STYLE:((auto\:"Enable emphasis when output is a terminal"
+always\:"Enable emphasis regardless of the output destination"
+never\:"Disable added emphasis; configured format and input-control processing still apply"))' \
+'--config=[Read an explicit TOML configuration file]:CONFIG:_files' \
+'*--exclude=[Add a command name to the interactive passthrough exclusions]:EXCLUDE:_default' \
+'--profile=[Named fixation preference; explicit numeric flags override its values]:PROFILE:((subtle\:"Emphasize fewer, longer words with a shorter prefix"
+balanced\:"Emphasize half of each eligible word"
+strong\:"Emphasize a longer prefix of every eligible word"))' \
+'*--length-rule=[Per-length fraction in MAX\:FRACTION form; repeat in increasing MAX order]:LENGTH_RULES:_default' \
+'--emphasis=[Emphasis attribute\: bold, underline, or reverse video]:EMPHASIS:((bold\:"Use bold intensity, restoring the original bold and faint attributes"
+underline\:"Use underlining without changing text colors or intensity"
+reverse\:"Use reverse video without selecting a brighter foreground color"))' \
+'--input-format=[Interpret ordinary text, Markdown source, or trusted terminal output]:INPUT_FORMAT:((text\:"Ordinary text with the configured terminal-control policy"
+markdown\:"\`CommonMark\` source with protected syntax and code spans"
+terminal\:"Trusted terminal output whose existing controls must be preserved"))' \
+'--format=[Emit ANSI, unstyled plain text, Markdown emphasis, or escaped HTML]:FORMAT:((ansi\:"Terminal emphasis, subject to the style policy"
+plain\:"Original text without terminal escape sequences or added emphasis"
+markdown\:"Markdown source with emphasis syntax around selected prefixes"
+html\:"Escaped HTML with semantic emphasis elements"))' \
+'--controls=[Remove active document controls, or preserve trusted terminal controls]:CONTROLS:((safe\:"Permit presentation styling and safe hyperlinks; remove active controls"
+preserve\:"Preserve terminal control bytes for trusted sources"))' \
+'--skip-code=[Protect Markdown code from emphasis (default true); use --skip-code=false to include it]::SKIP_CODE:(true false)' \
+'--low-latency=[Flush stalled partial words unchanged after 50 ms; disables content-only determinism]::LOW_LATENCY:(true false)' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'*::command:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_bionic-reader__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bionic-reader-help-command-$line[1]:"
+        case $line[1] in
+            (read)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(preview)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(session)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(on)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(off)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(toggle)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reload)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(bypass)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_bionic-reader_commands] )) ||
+_bionic-reader_commands() {
+    local commands; commands=(
+'read:Read a document with scrolling, search, and adjustable fixation settings' \
+'preview:Preview fixation settings on a sample passage or supplied text' \
+'session:Start an interactive reading session' \
+'init:Print an opt-in initialization snippet for your shell configuration' \
+'completions:Print completion definitions for your shell' \
+'on:Enable emphasis in the current reading session' \
+'off:Disable emphasis in the current reading session' \
+'toggle:Toggle emphasis in the current reading session' \
+'reload:Reload settings at the next shell command boundary' \
+'bypass:Run a command without emphasis, restoring the prior state afterward' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bionic-reader commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__bypass_commands] )) ||
+_bionic-reader__subcmd__bypass_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader bypass commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__completions_commands] )) ||
+_bionic-reader__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader completions commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help_commands] )) ||
+_bionic-reader__subcmd__help_commands() {
+    local commands; commands=(
+'read:Read a document with scrolling, search, and adjustable fixation settings' \
+'preview:Preview fixation settings on a sample passage or supplied text' \
+'session:Start an interactive reading session' \
+'init:Print an opt-in initialization snippet for your shell configuration' \
+'completions:Print completion definitions for your shell' \
+'on:Enable emphasis in the current reading session' \
+'off:Disable emphasis in the current reading session' \
+'toggle:Toggle emphasis in the current reading session' \
+'reload:Reload settings at the next shell command boundary' \
+'bypass:Run a command without emphasis, restoring the prior state afterward' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bionic-reader help commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__bypass_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__bypass_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help bypass commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__completions_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help completions commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__help_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help help commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__init_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help init commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__off_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__off_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help off commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__on_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__on_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help on commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__preview_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__preview_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help preview commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__read_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help read commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__reload_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__reload_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help reload commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__session_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__session_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help session commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__help__subcmd__toggle_commands] )) ||
+_bionic-reader__subcmd__help__subcmd__toggle_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader help toggle commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__init_commands] )) ||
+_bionic-reader__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader init commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__off_commands] )) ||
+_bionic-reader__subcmd__off_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader off commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__on_commands] )) ||
+_bionic-reader__subcmd__on_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader on commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__preview_commands] )) ||
+_bionic-reader__subcmd__preview_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader preview commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__read_commands] )) ||
+_bionic-reader__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader read commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__reload_commands] )) ||
+_bionic-reader__subcmd__reload_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader reload commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__session_commands] )) ||
+_bionic-reader__subcmd__session_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader session commands' commands "$@"
+}
+(( $+functions[_bionic-reader__subcmd__toggle_commands] )) ||
+_bionic-reader__subcmd__toggle_commands() {
+    local commands; commands=()
+    _describe -t commands 'bionic-reader toggle commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_bionic-reader" ]; then
+    _bionic-reader "$@"
+else
+    compdef _bionic-reader bionic-reader
+fi

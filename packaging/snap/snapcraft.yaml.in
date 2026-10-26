@@ -1,0 +1,45 @@
+name: bionic-reader
+version: "@VERSION@"
+summary: Local word-prefix emphasis for text and terminal sessions
+description: |
+  Bionic Reader emphasizes word beginnings in text streams and opt-in
+  interactive shell sessions. Session support requires classic confinement.
+base: core24
+confinement: classic
+grade: devel
+
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: amd64
+  arm64:
+    build-on: [arm64]
+    build-for: arm64
+
+parts:
+  bionic-reader:
+    plugin: rust
+    source: "@SOURCE_PATH@"
+    source-type: local
+    rust-path: ["."]
+    rust-channel: "1.85.1"
+    rust-inherit-ldflags: true
+    build-environment:
+      - LDFLAGS: >
+          -Wl,-rpath=\$ORIGIN/lib:/snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+          -Wl,-dynamic-linker=$(find /snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR -name 'ld*.so.*' -print | head -n1)
+    override-build: |
+      craftctl default
+      install -Dm644 "$CRAFT_PART_SRC/LICENSE" "$CRAFT_PART_INSTALL/share/licenses/bionic-reader/LICENSE"
+      install -Dm644 "$CRAFT_PART_SRC/README.md" "$CRAFT_PART_INSTALL/share/doc/bionic-reader/README.md"
+      install -Dm644 "$CRAFT_PART_SRC/packaging/config.example.toml" "$CRAFT_PART_INSTALL/share/bionic-reader/config.example.toml"
+      install -d "$CRAFT_PART_INSTALL/share/bionic-reader/integrations"
+      cp -R "$CRAFT_PART_SRC/integrations/." "$CRAFT_PART_INSTALL/share/bionic-reader/integrations/"
+      install -d "$CRAFT_PART_INSTALL/share/bionic-reader/completions"
+      cp -R "$CRAFT_PART_SRC/completions/." "$CRAFT_PART_INSTALL/share/bionic-reader/completions/"
+
+apps:
+  bionic-reader:
+    command: bin/bionic-reader
+    environment:
+      PATH: "$SNAP/bin:/snap/bin:$PATH"

@@ -1,88 +1,93 @@
-# Bionic Reader design
+# Design and behavior
 
-Status: specification published as [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1), labelled `ready-for-agent`. This document records agreed product decisions and synthesized implementation defaults; use the published specification as the implementation reference. Implementation has not started.
+Bionic Reader is a local Rust command-line program for word-prefix emphasis in
+text streams and opt-in interactive shell sessions. It keeps text on the user's
+machine and preserves source content and layout. It does not promise a reading
+speed improvement.
 
-## Product
+See the [README](../README.md) for installation and use, [ADR 0002](adr/0002-document-rendering-and-reader.md)
+for the document-rendering and reader decisions, and the [verification record](verification.md)
+for tested behavior and release gates.
 
-- Build a Rust CLI named `bionic-reader` that performs local word-prefix emphasis, with no external text-processing service.
-- Accept explicit text with `bionic-reader -t "<TEXT>"` and stdin with `cat <file> | bionic-reader`.
-- Use terminal bold by default, with adjustable emphasis length and frequency.
-- Default to emphasizing the first half of every eligible Latin-script word, rounding up and leaving single-letter words unchanged. Expose `--fraction 0.5`, `--every 1`, and `--min-word-length 2`; count accented letters correctly.
-- Internal apostrophes remain part of a word. Hyphens, underscores, digits, and other punctuation separate word segments. Preserve all original characters; leave digits and emoji unchanged and keep combining marks attached to their letters.
-- Preserve text and layout, including mixed prose, source code, logs, URLs, and existing colors. Readable prose is the primary target; do not claim a guaranteed reading-speed improvement.
-- Emphasize Latin-script words, including accented text. Preserve other scripts unchanged in v1.
+## Unicode text processing
 
-## Output and shell integration
+The default segmenter uses ICU4X Unicode word boundaries, including automatic
+support for complex scripts, then aligns ranges to extended grapheme clusters.
+`FixationEngine` selects letter-prefix ranges from those word ranges. Fractions
+count letter graphemes, keeping combining marks and joined graphemes intact;
+punctuation and normalization are preserved. Applications can provide their
+own `WordSegmenter` and reuse a `FixationEngine` across text fragments.
 
-- Support `--style auto|always|never`, defaulting to `auto`: add emphasis on terminal stdout and add no emphasis when stdout is redirected, unless explicitly overridden. Both redirected `auto` and `never` preserve existing input formatting; they do not strip ANSI sequences.
-- Include an opt-in reading session using a pseudo-terminal in addition to explicit text and stdin filtering.
-- Emphasize command output while preserving shell prompts, editing, and typed input through shell integration boundaries. Bypass known interactive commands and full-screen applications such as Vim, top, and fzf, and use passthrough when terminal behavior is uncertain. Provide configurable command exclusions and an explicit bypass. Application-generated prompts, nested interactive programs, and background output cannot always be classified reliably; do not promise universal detection.
-- Integrate with Bash, Zsh, and fish configuration files.
-- Include macOS system Bash 3.2 as well as modern Bash, using a compatibility path for its older prompt and execution hooks. Preserve existing hooks and command exit status; test the legacy path explicitly.
-- Provide and test adapters for Bash-it, Oh My Bash, Oh My Zsh, Prezto, Zinit, Fisher, and Oh My Fish. Each adapter activates the shared integration for its shell.
-- Support manual startup with `bionic-reader session` and generated Bash/Zsh/fish initialization snippets for automatic startup in interactive terminals. Adding the snippet is the opt-in; package installation does not edit shell configuration.
-- Provide `bionic-reader on`, `off`, `toggle`, and `reload` scoped to the current reading session. Reload explicitly applies configuration-file changes.
-- Provide `bionic-reader bypass -- <command>` to suspend transformation for a command and restore the prior state afterward.
-- Document the automatic-start escape hatch as `BIONIC_READER_DISABLE=1`. The initializer must be interactive-only and idempotent, and must not create nested reading sessions.
+The default settings emphasize half of each eligible word, select every word,
+and require at least two letters. Subtle, balanced, and strong profiles set
+fraction, frequency, and minimum length. Inclusive length rules can override
+the fraction for shorter words. An explicit profile is applied before numeric
+overrides from the same settings source.
 
-## Implementation defaults for final review
+## Document rendering and controls
 
-- Count Latin letters with attached combining marks as visible letter units without normalizing or rewriting input. Internal straight and curly apostrophes do not add to the letter count. Apply the same segmentation to prose, code, logs, paths, and URLs; there is no language-specific syntax rewriting.
-- `--fraction` accepts a finite value from 0 through 1. `--every` and `--min-word-length` accept positive integers. A zero fraction adds no emphasis.
-- With `--every N`, select the first eligible word and then every Nth eligible word. Short words and unsupported scripts do not advance the eligible-word count. Reset the count for each filter invocation and each marked shell command.
-- Preserve whitespace and trailing-newline presence exactly. Do not append a newline to explicit text unless it was present in the input.
-- Existing SGR styling and hyperlink payloads must survive transformation. Restore the prior emphasis state after each emphasized prefix rather than clearing unrelated styles. Terminal control sequences are not words.
-- In sessions, use shell execution boundaries and known interactive-command exclusions. Treat unsafe or unrecognized terminal activity as passthrough until a trustworthy shell boundary. Background output can only be classified by the interval in which it arrives.
-- Controls affect only the current reading session and report a clear error outside one. Failed reloads keep the last valid settings. Apply successful reloads at the next command boundary.
-- Preserve the exit status and terminal interaction of bypassed commands, restoring the previous reading state on completion or interruption.
+Document input can be ordinary text, CommonMark Markdown, or trusted terminal
+output. Output can be ANSI, plain text, Markdown, or escaped HTML. ANSI and
+plain processing preserve ordinary bytes, including malformed UTF-8; Markdown
+and HTML conversion require valid UTF-8. The interactive reader displays
+malformed bytes with replacement characters.
 
-## Streaming
+The default safe control policy retains valid SGR styling and OSC 8 hyperlinks
+with HTTP, HTTPS, or mailto destinations for ANSI output, while removing other
+terminal controls. With ANSI output, `--controls preserve` or
+`--input-format terminal` preserves controls for trusted sources. Plain output
+removes all controls regardless of that policy. HTML escapes raw HTML and only
+emits links with safe destinations.
+Markdown parsing protects code, link destinations, escapes, and entities; code
+is protected by default. Markdown-to-Markdown conversion rejects code
+emphasis when code protection is disabled, since emphasis markers would change
+literal code content.
+Markdown output always uses CommonMark strong syntax, independent of the
+configured emphasis style. HTML reverse emphasis emits a `bionic-reverse` class;
+consumers supply CSS if they want that class to change foreground and background
+colors.
 
-- Process input incrementally with bounded buffering rather than waiting for an entire file or stream.
-- Pass malformed bytes through unchanged. Leave oversized or stalled partial words unemphasized instead of buffering or delaying output indefinitely.
-- Use initial bounds of 64 KiB for a pending word or control sequence and a 50 ms flush deadline for partial output. When a word falls back to passthrough, keep the remainder of that word unchanged. Validate these bounds in the terminal prototype before treating them as release defaults.
+## Streaming and interactive reading
 
-## Input and configuration
+Terminal transformation is incremental and deterministic by default. A
+trailing word is held until a boundary arrives; a word exceeding the 64 KiB
+pending limit is passed through unchanged. With safe document controls, an
+incomplete control sequence over 8 KiB is discarded and drained without retaining
+its payload. Trusted terminal input preserves control bytes while bounding the
+transformer's retained parser state.
+`--low-latency` flushes a stalled partial word
+unchanged after 50 ms for ANSI filtering; reading sessions use the same
+time-bounded behavior to keep command output responsive.
 
-- `-t` supplies the complete input without reading stdin, even when stdin is piped. Explicit empty text is valid.
-- Without `-t`, read stdin when redirected. When stdin is an interactive terminal, show help instead of waiting for text.
-- Store user settings in TOML at `$XDG_CONFIG_HOME/bionic-reader/config.toml`, falling back to `~/.config/bionic-reader/config.toml`.
-- Allow an explicit file with `--config <path>`.
-- Command-line flags override file settings, which override built-in defaults. Report invalid configuration clearly.
+Markdown streaming spools input to disk and processes bounded blocks. Blocks
+and reference-definition catalogs are each limited to 1 MiB; oversized input
+uses an unstyled literal fallback, escaped when the selected output format
+requires it. The in-memory Markdown rendering API accepts inputs up to 8 MiB;
+use the streaming API for larger documents.
 
-## Release coverage
+The interactive reader also spools the document to disk and stores line
+positions in memory. It reads view rows and search ranges from the spool,
+protects Markdown code and links when requested, wraps on grapheme boundaries,
+and restores terminal state when it exits. Its line index grows with the
+document's line count; the document text itself is not retained in memory.
 
-- Support macOS and Linux on x86-64 and ARM64. Windows is deferred.
-- Target macOS 11+, Linux glibc 2.28+, and musl-based Linux on both architectures. Package managers may impose stricter host requirements.
-- Every requested package manager is required at the first public release, on its applicable operating systems: Homebrew, apt, dnf, pacman, Snap, pip, uv, npm, Yarn, and pnpm.
-- Project-maintained distribution channels are acceptable: a Homebrew tap, project package repositories, Snap Store, PyPI, and npm. Inclusion in operating-system official repositories is not a release requirement.
-- Snap must preserve reading-session functionality through classic confinement. First public release waits for [Snap Store classic-confinement approval](https://snapcraft.io/docs/reference/administration/reviewing-classic-confinement-snaps/). If approval is refused, revisit the release requirement rather than silently reducing Snap functionality.
-- Keep the repository private during design; making the source public is part of the first-release plan.
-- Use the MIT license with copyright attribution to `arturoaviles and contributors`.
-- The executable is always `bionic-reader`. Prefer that package name wherever registrable; use `@arturoaviles/bionic-reader` as the npm fallback and `bionic-reader-cli` on registries without namespaces. Registry-name availability is provisional until reserved.
+## Configuration and shell sessions
 
-## Implementation and distribution approach
+Settings load from built-in defaults, an optional TOML file, and command-line
+overrides, in that order. The default path is
+`$XDG_CONFIG_HOME/bionic-reader/config.toml` when `XDG_CONFIG_HOME` is absolute,
+otherwise `~/.config/bionic-reader/config.toml`. A profile in a source is
+applied before that source's explicit numeric values. Additional command
+exclusions are appended to the built-in safety list.
 
-- Separate the Rust text transformer, ANSI-aware renderer, CLI/configuration handling, and PTY/session integration so filter behavior can be tested without a shell.
-- Prove the session boundary and passthrough behavior in Bash 3.2, modern Bash, Zsh, and fish before expanding framework adapters. Preserve prompts and existing hooks, propagate resizing and signals, maintain job control, and restore terminal state on normal exit, errors, and handled signals.
-- Build macOS x86-64/ARM64 binaries and Linux GNU/musl x86-64/ARM64 binaries. Audit actual deployment targets and linked-library requirements.
-- Distribute one versioned Rust implementation through native packages and thin Python/JavaScript packaging. Python and JavaScript packages must not reimplement text processing.
-- Deliver a Homebrew tap, signed apt/dnf/pacman project repositories, a classic Snap, platform-specific PyPI wheels usable by pip and uv, and npm packages usable by npm, Yarn, and pnpm.
-- Prefer npm platform-specific binary dependencies over install-time compilation or downloads. Verify launcher behavior and modern Yarn execution modes; do not assume all Yarn versions provide global installation.
-- Include shell initialization, framework adapters, completions, configuration examples, and uninstall instructions with the applicable packages. Removing integration must not require reconstructing overwritten user configuration.
-- Prepare registry ownership, name reservations, signing keys, repository hosting, and publisher credentials before release. Validate artifacts before publishing; Snap approval remains an external release blocker.
+Opt-in shell sessions are supported in Bash, Zsh, and fish. Their initializers
+and framework adapters use the same session implementation. Known interactive
+commands and explicit exclusions run in passthrough; background output,
+nested programs, and application-generated prompts cannot always be classified
+reliably. The session controls `on`, `off`, `toggle`, `reload`, and `bypass`
+affect the current session.
 
-## Acceptance checks
-
-- Exact `-t` and stdin behavior, empty input, non-TTY defaults, forced and disabled emphasis, configuration precedence, and clear invalid-setting errors.
-- Golden cases for accented and decomposed Latin text, apostrophes, hyphens, punctuation, digits, emoji, unsupported scripts, source code, paths, URLs, and whitespace preservation.
-- Streaming tests across arbitrary byte boundaries, including split UTF-8 and ANSI sequences, malformed bytes, slow partial words, oversized words, large input, and broken pipes without panics. Equivalent chunking without a timeout must produce equivalent output.
-- Existing colors, bold/dim state, hyperlinks, and unknown controls survive without style leakage or altered control payloads.
-- PTY tests cover shell prompts, completion and input editing, multiline commands, full-screen bypass, known interactive commands, Ctrl-C, Ctrl-Z/foreground/background jobs, resizing, EOF, and child exit status.
-- Verify all seven framework adapters compose with existing hooks and initialize once. Missing or inconsistent integration falls back to passthrough.
-- Verify session on/off/toggle/reload, invalid reload retention, per-command bypass restoration, recursion prevention, the disable escape hatch, and isolation between simultaneous sessions.
-- Installation and uninstall smoke tests for every requested package-manager route on its supported platforms. Exercise `-t`, stdin, shell initialization, session behavior, and version reporting from installed artifacts; verify Python and Node wrappers retain native behavior.
-
-## Published specification
-
-The product decisions are confirmed through Q1–Q27. The conversation and design were synthesized into [GitHub issue #1](https://github.com/arturoaviles/bionic-reader/issues/1) using `to-spec`, including user stories, implementation decisions, testing decisions, scope boundaries, and release prerequisites. Synthesized buffer/deadline values remain subject to prototype validation. No Rust implementation, package publication, registry reservation, or repository-visibility change has been performed.
+The current native candidate targets are macOS and GNU or musl Linux on x86-64
+and ARM64. Windows is outside the current target matrix. Packages are built
+from this repository; publication and host-specific release validation are
+tracked separately in the verification record.

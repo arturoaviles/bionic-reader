@@ -1,0 +1,10 @@
+[files]
+extend-exclude = ["Cargo.lock", "fuzz/Cargo.lock", "completions/*"]
+
+[default.extend-words]
+# Unix interfaces and intentional language/regression fixtures.
+fo = "fo"
+documen = "documen"
+thr = "thr"
+fpr = "fpr"
+Pn = "Pn"
