@@ -296,6 +296,8 @@ jobs:
         run: |
           scripts/build-local-archive.sh
           scripts/check-homebrew-install.sh
+      - name: Install the repository source formula from main
+        run: scripts/check-homebrew-install.sh --source
 
   snap-local:
     name: Local Snap build, install, and use

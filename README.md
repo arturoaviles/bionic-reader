@@ -2,7 +2,34 @@
 
 Bionic Reader is a local Rust command-line program that emphasizes the beginnings of words in text streams and opt-in interactive shell sessions. It transforms text on your machine; it does not send text to a service. It preserves the input text and layout and does not promise a reading-speed improvement.
 
-**Install from this GitHub repository.** Every route below uses the checkout or a locally built package. Bionic Reader is unpublished; no Bionic Reader registry package or GitHub release is required.
+**Install from this GitHub repository.** Use [Homebrew](#install-with-homebrew) to build directly from `main`, or use the checkout and local packages below. Bionic Reader is unpublished; no Bionic Reader registry package or GitHub release is required.
+
+## Install with Homebrew
+
+On macOS or GNU/Linux with Homebrew installed, use this repository as the tap:
+
+```sh
+brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
+brew install --HEAD arturoaviles/bionic-reader/bionic-reader
+brew test arturoaviles/bionic-reader/bionic-reader
+bionic-reader --version
+```
+
+Homebrew installs Rust as a build dependency and compiles the current `main` source with the checked-in `Cargo.lock`. On macOS, Xcode Command Line Tools are also required. `--HEAD` is required until a stable release is published. The explicit repository URL is required because this repository does not use Homebrew's default `homebrew-` naming convention.
+
+If `brew install arturoaviles/tap/bionic-reader` fails with `Repository not found`, use the commands above. That older command points to the unavailable `arturoaviles/homebrew-tap` repository.
+
+To update or remove the installation:
+
+```sh
+brew update
+brew upgrade --fetch-HEAD arturoaviles/bionic-reader/bionic-reader
+# To uninstall:
+brew uninstall arturoaviles/bionic-reader/bionic-reader
+brew untap arturoaviles/bionic-reader
+```
+
+Then follow [standalone shell setup](#standalone-shell-setup) or [framework setup](#shell-framework-setup) to activate reading sessions. To install a local checkout instead, use the [local Homebrew archive route](#homebrew) below.
 
 ## How to install
 
@@ -25,17 +52,9 @@ cd bionic-reader
 
 The repository is public; cloning over HTTPS does not require GitHub authentication.
 
-Until [implementation PR #2](https://github.com/arturoaviles/bionic-reader/pull/2) is merged, select its branch:
-
-```sh
-git switch feat/bionic-reader
-```
-
-Skip that branch-selection step once the implementation is merged into `main`.
-
 ### 3. Build and install
 
-This is the Cargo route. For another package manager, jump to [repository package installations](#install-with-the-other-package-managers-from-this-repository) after cloning and selecting the branch.
+This is the Cargo route. For another package manager, jump to [repository package installations](#install-with-the-other-package-managers-from-this-repository) after cloning.
 
 Run from the cloned repository:
 
@@ -77,23 +96,23 @@ cargo run --locked -- -t 'Try Bionic Reader before installing.'
 
 Cargo installs the executable. To activate automatic reading sessions, follow either [standalone shell setup](#standalone-shell-setup) or [framework setup](#shell-framework-setup) below. Neither installation nor activation requires publishing a package.
 
-To update later, pull the branch you installed and rerun `cargo install --path . --locked --force`. After PR #2 merges, switch your checkout to `main` before pulling updates.
+To update later, pull `main` and rerun `cargo install --path . --locked --force`.
 
 ## Install with Cargo
 
 Cargo is supported on macOS and Linux with Rust 1.85.1 or newer and the C build tools listed above. The source installation in the steps above uses Cargo already. To install directly from the public Git repository without a separate checkout, run:
 
 ```sh
-cargo install --git https://github.com/arturoaviles/bionic-reader.git --branch feat/bionic-reader --locked bionic-reader
+cargo install --git https://github.com/arturoaviles/bionic-reader.git --locked bionic-reader
 ```
 
-The branch selects the implementation until PR #2 merges. After it merges, omit `--branch feat/bionic-reader` to install from `main`. Then follow [the PATH instructions](#4-make-the-executable-available-to-your-shell) and [verify the installation](#5-verify-the-installation). Git installation installs the executable; clone the repository if you also want to copy framework adapters or completion files as described below. Shell initialization and completion generation are built into the executable.
+This installs from `main`. Then follow [the PATH instructions](#4-make-the-executable-available-to-your-shell) and [verify the installation](#5-verify-the-installation). Git installation installs the executable; clone the repository if you also want to copy framework adapters or completion files as described below. Shell initialization and completion generation are built into the executable.
 
 Use `cargo uninstall bionic-reader` to remove a Cargo installation. Keep `--locked` on installs so Cargo uses the dependencies validated with that version. Maintainers can build and verify the source archive with `cargo package --locked`; see [Cargo crate validation](CONTRIBUTING.md#cargo-crate-validation).
 
 ## Install with the other package managers from this repository
 
-Choose one route below after cloning and selecting the implementation branch above. The packaging helpers require Python 3.9 or newer; Linux users also need their distribution's Python venv support for the Python build-tool environments. Run build commands from the repository root in Bash or Zsh. These routes build the current checkout and install local files; they do not require a Bionic Reader registry package or GitHub release. Upstream build tools and Rust dependencies still need network access on their first installation.
+Choose one route below after cloning the repository above. The packaging helpers require Python 3.9 or newer; Linux users also need their distribution's Python venv support for the Python build-tool environments. Run build commands from the repository root in Bash or Zsh. These routes build the current checkout and install local files; they do not require a Bionic Reader registry package or GitHub release. Upstream build tools and Rust dependencies still need network access on their first installation.
 
 Set the checkout's version and native target once:
 
