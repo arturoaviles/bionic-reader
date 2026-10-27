@@ -14,7 +14,7 @@ settings to find what feels comfortable; no reading-speed improvement is promise
 ## Installation
 
 Install with your package manager using the commands below. Homebrew installs
-prebuilt binaries; Cargo's Git installation builds from source. See
+prebuilt binaries; Cargo installs from crates.io. See
 [installation details](https://github.com/arturoaviles/bionic-reader/blob/main/docs/INSTALL.md)
 for channel availability, direct-download alternatives, and platform requirements.
 
@@ -28,7 +28,7 @@ brew install bionic-reader
 
 Homebrew selects the matching prebuilt binary. See the
 [Homebrew guide](https://github.com/arturoaviles/bionic-reader/blob/main/docs/INSTALL.md#homebrew)
-for updates, removal, and a source-build option.
+for updates, removal, and platform requirements.
 
 ### Linux
 
@@ -59,35 +59,36 @@ yarn add @arturoaviles/bionic-reader
 pnpm add --global @arturoaviles/bionic-reader
 ```
 
-### Cargo and Snap
+### Cargo
 
 ```sh
-cargo install --git https://github.com/arturoaviles/bionic-reader.git --locked bionic-reader
-
-# Snap currently installs a repository-built file; see the build guide.
-sudo snap install --dangerous --classic ./dist/local/snap/bionic-reader_*.snap
+cargo install bionic-reader --locked
 ```
 
 Yarn installs into the current project; run it with `yarn bionic-reader`.
 Package managers select the CPU architecture automatically. Linux release
-filenames use the native architecture query shown above. Snap build instructions
-live in [BUILD.md](https://github.com/arturoaviles/bionic-reader/blob/main/docs/BUILD.md#snap-ubuntu-2404).
+filenames use the native architecture query shown above.
 You can also download native binaries from [GitHub Releases](https://github.com/arturoaviles/bionic-reader/releases).
 
 ## Application libraries
 
-Use the same local transformation engine from Python, JavaScript, or Rust.
-These APIs are available in this checkout; registry availability depends on a
-separately verified release. See the [library guide](docs/LIBRARY.md) for local
-package builds, complete options, errors, and the validated platform matrix.
+Install packages from [PyPI](https://pypi.org/project/bionic-reader/),
+[npm](https://www.npmjs.com/package/@arturoaviles/bionic-reader), or
+[crates.io](https://crates.io/crates/bionic-reader). The library APIs below share
+the CLI's local transformation engine. See the [library guide](docs/LIBRARY.md)
+for complete options, errors, and platform requirements.
+
+The published Python and npm packages currently provide the CLI; the published
+Rust crate exposes the existing lower-level APIs. The new callable APIs shown
+below require the forthcoming library release.
 
 ### Python
 
-Requires Python 3.11+. After [building the wheel](docs/BUILD.md#pip), install it
-into your application's virtual environment:
+The library API requires Python 3.11+. Install into your application's virtual
+environment:
 
 ```sh
-python -m pip install dist/local/python/bionic_reader-*.whl
+python -m pip install bionic-reader
 ```
 
 ```python
@@ -100,8 +101,13 @@ print(reader.segments("Hello world"))
 
 ### JavaScript
 
-Requires Node 22+. Install the [built npm package](docs/BUILD.md#npm) into your
-application, then initialize the bundled WebAssembly engine once:
+The library API requires Node 22+. Install into your application:
+
+```sh
+npm install @arturoaviles/bionic-reader
+```
+
+Initialize the bundled WebAssembly engine once:
 
 ```js
 import { createReader } from '@arturoaviles/bionic-reader';
@@ -119,12 +125,10 @@ browser loader. React applications can use `BionicReaderProvider` and
 
 ### Rust
 
-Requires Rust 1.85.1+. Until a crate is published, add the local checkout to your
-application's `Cargo.toml`, adjusting the path:
+Requires Rust 1.85.1+. Add the crate to your application:
 
-```toml
-[dependencies]
-bionic-reader = { path = "../bionic-reader", default-features = false }
+```sh
+cargo add bionic-reader
 ```
 
 ```rust

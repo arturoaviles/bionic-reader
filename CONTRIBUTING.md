@@ -120,7 +120,7 @@ gitleaks git --log-opts="--all" --redact=100 --no-banner --exit-code=1 .
 
 ## Cargo crate validation
 
-Cargo currently installs from this checkout, its Git source, or an extracted local `.crate`; no Bionic Reader package has been published to crates.io. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling. The development Makefile belongs to the Git checkout; packaged-source tests run with Cargo directly.
+Bionic Reader is published on crates.io. Contributors can also validate installations from this checkout, its Git source, or an extracted local `.crate`. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling. The development Makefile belongs to the Git checkout; packaged-source tests run with Cargo directly.
 
 From a clean checkout, run:
 

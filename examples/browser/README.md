@@ -1,9 +1,12 @@
 # Browser example
 
-Install the built npm tarball into this directory, then start Vite:
+Install the npm package into this directory, then start Vite:
+
+This example requires the forthcoming library release; the currently published
+npm package provides the CLI.
 
 ```sh
-npm install /absolute/path/to/bionic-reader-base-vVERSION.tgz
+npm install @arturoaviles/bionic-reader
 npm run dev
 ```
 

@@ -5,18 +5,19 @@ including multilingual word boundaries, profiles, Markdown handling, and safe
 terminal controls. React renders its text segments. Processing runs locally;
 applications do not launch the CLI or call a service.
 
-These APIs are implemented in this checkout. Registry availability depends on a
-separately verified release; see [installation](INSTALL.md) and [release
-preparation](RELEASE.md). The examples below work with locally built artifacts.
+Packages are published on [PyPI](https://pypi.org/project/bionic-reader/),
+[npm](https://www.npmjs.com/package/@arturoaviles/bionic-reader), and
+[crates.io](https://crates.io/crates/bionic-reader). The current Python/npm
+releases provide the CLI, and the Rust crate exposes its existing lower-level
+APIs. The new application APIs documented below require the forthcoming library
+release. See [installation](INSTALL.md) for package-manager details.
 
 ## Rust
 
-Use the `bionic-reader` crate from this checkout or its Git repository until a
-crate is published. Rust 1.85.1 is the minimum compiler:
+Rust 1.85.1 is the minimum compiler. Add the crate from crates.io:
 
-```toml
-[dependencies]
-bionic-reader = { git = "https://github.com/arturoaviles/bionic-reader.git", default-features = false, features = ["config"] }
+```sh
+cargo add bionic-reader
 ```
 
 ```rust
@@ -39,12 +40,10 @@ includes `native` and terminal/session support. The library installs no allocato
 
 ## Python
 
-Install the built wheel into an application environment, using Python 3.11 or
-newer. See [wheel build instructions](BUILD.md#pip).
+Install from PyPI into an application environment, using Python 3.11 or newer.
 
 ```sh
-python -m pip install dist/local/python/bionic_reader-*.whl
-python examples/python/reading.py
+python -m pip install bionic-reader
 ```
 
 ```python
@@ -66,7 +65,13 @@ installation is needed for imports.
 
 ## JavaScript and Node
 
-Use Node 22 or newer. Both ESM and CommonJS provide the same factory:
+Use Node 22 or newer and install from npm:
+
+```sh
+npm install @arturoaviles/bionic-reader
+```
+
+Both ESM and CommonJS provide the same factory:
 
 ```js
 import { createReader } from '@arturoaviles/bionic-reader';
@@ -167,34 +172,10 @@ performed by these parsing functions. See the [configuration guide](CONFIGURATIO
 for profile values and rule behavior, and the [usage guide](USAGE.md) for format
 restrictions and control handling.
 
-## Build and validate installed packages
+## Package verification
 
-The Vite examples require Node 22.12 or newer. Build tools are pinned separately from runtime minimums. Use maturin 1.15.0 for
-Python, wasm-bindgen 0.2.129 for JavaScript, and the checked-in Cargo lockfile.
-Portable Linux wheels use Zig 0.15.1 so their runtime libraries match GNU or
-musl targets; host-local GNU wheels can use the native toolchain.
-Install the `wasm32-unknown-unknown` Rust target, put the pinned wasm-bindgen CLI
-on PATH (or set `WASM_BINDGEN`), then run:
-
-```sh
-scripts/build-library-wasm.sh
-python3 scripts/package-library-candidate.py --version 0.1.0 --output dist/library-api.tgz
-npm ci --ignore-scripts --no-audit --no-fund
-npm run check:node -- dist/library-api.tgz
-npm run check:example -- browser dist/library-api.tgz
-npm run check:example -- react dist/library-api.tgz
-npm run check:example -- next dist/library-api.tgz
-```
-
-The API-only tarball is an internal test candidate: it omits native CLI optional
-dependencies so Windows can test the public JavaScript API before publication.
-Release npm packages retain the native CLI dependencies. Build the shared Wasm
-payload before running `scripts/package-npm.sh --local`; see [BUILD.md](BUILD.md#npm).
-For browser checks, install Playwright's Chromium first (`npx playwright install
-chromium`), or set `BIONIC_BROWSER=chromium BIONIC_BROWSER_CHANNEL=chrome` to use installed Chrome. The example
-checkers create isolated consumers and clean their own servers and directories.
-Set `BIONIC_REACT_VERSION=18.3.1` and `BIONIC_REACT_TYPES=18.3.31` for the React 18
-consumer checks. See CI for pinned React 19 and framework versions.
+Local package builds and installed-candidate checks are documented in
+[BUILD.md](BUILD.md#build-and-validate-library-packages).
 
 The language-neutral [fixture corpus](../tests/fixtures/library.json) is consumed
 through public Rust, installed Python, Node ESM/CommonJS, and browser APIs. CI

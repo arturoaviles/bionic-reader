@@ -1,10 +1,13 @@
 # Next.js server rendering
 
 This Pages Router example pins Next.js 16.4.3 and React 19.3.1 and uses Webpack.
-Install the built package, build, then start:
+Install the npm package, build, then start:
+
+This example requires the forthcoming library release; the currently published
+npm package provides the CLI.
 
 ```sh
-npm install /absolute/path/to/bionic-reader-base-vVERSION.tgz
+npm install @arturoaviles/bionic-reader
 npm run build
 npm start
 ```

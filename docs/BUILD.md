@@ -1,6 +1,6 @@
 # Build Bionic Reader
 
-These instructions are for contributors and users who want to compile Bionic Reader or create local packages. For Homebrew, apt, dnf, pacman, pip, uv, npm, Yarn, pnpm, Cargo and Snap installation entry points, see the [README](../README.md#installation). Native package managers select supported architectures automatically. Rust and build tools are required only for source builds.
+These instructions are for contributors and users who want to compile Bionic Reader or create local packages. For Homebrew, apt, dnf, pacman, pip, uv, npm, Yarn, pnpm, Cargo installation entry points, see the [README](../README.md#installation). Native package managers select supported architectures automatically. Rust and build tools are required only for source builds.
 
 ## Build and install from source
 
@@ -116,6 +116,23 @@ brew uninstall arturoaviles/bionic-reader-local/bionic-reader
 brew untap arturoaviles/bionic-reader-local
 ```
 
+### Homebrew from main
+
+To build the latest source instead of installing a prebuilt release, use this
+repository as a separate tap:
+
+```sh
+brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
+brew trust arturoaviles/bionic-reader
+brew install --HEAD bionic-reader
+```
+
+This installs Rust as a build dependency and compiles `main` using the checked-in
+`Cargo.lock`. On macOS, Xcode Command Line Tools are also required. Update this
+installation with `brew update` followed by `brew upgrade --fetch-HEAD bionic-reader`.
+To switch to the prebuilt channel, run `brew uninstall bionic-reader` and
+`brew untap arturoaviles/bionic-reader`, then follow the tap installation above.
+
 ### apt, dnf, and pacman: build local system packages
 
 On GNU/Linux, install [Go 1.26.4 or newer](https://go.dev/doc/install) and the Rust/C prerequisites first. The following prepares the pinned packaging tools, then builds the checkout into local `.deb`, `.rpm`, and `.pkg.tar.zst` files. The Python environment is for build tools, separate from the installed application:
@@ -223,7 +240,7 @@ The wheel contains the native Python library, executable, configuration example,
 
 ### npm
 
-Requires Node.js 22 or newer and npm. Build the shared WebAssembly payload with wasm-bindgen 0.2.129 first (see [library builds](LIBRARY.md#build-and-validate-installed-packages)), then build a host-local archive and create the local Node tarballs:
+Requires Node.js 22 or newer and npm. Build the shared WebAssembly payload with wasm-bindgen 0.2.129 first (see [library builds](#build-and-validate-library-packages)), then build a host-local archive and create the local Node tarballs:
 
 ```sh
 scripts/build-local-archive.sh
@@ -302,6 +319,46 @@ export PATH="$HOME/.local/bin:$PATH"
 Keep the tools project and tarball directory. Add the PATH line to your shell configuration. Remove the package later with `pnpm --dir "$HOME/.local/share/bionic-reader/pnpm-tools" remove @arturoaviles/bionic-reader`, then remove the launcher you created. It shares its command name with the other installation routes.
 
 To update an unpublished build, pull the chosen Git branch, rebuild its local artifact, and remove/reinstall using the corresponding commands above. Installation does not activate shell integration; follow the shell/framework instructions in the [shell guide](SHELL.md#standalone-shell-setup) after putting your chosen executable or launcher on PATH.
+
+## Build and validate library packages
+
+The Vite examples require Node 22.12 or newer. Build tools are pinned separately
+from runtime minimums. Use maturin 1.15.0 for Python, wasm-bindgen 0.2.129 for
+JavaScript, and the checked-in Cargo lockfile.
+Portable Linux wheels use Zig 0.15.1 so their runtime libraries match GNU or
+musl targets; host-local GNU wheels can use the native toolchain.
+Install the `wasm32-unknown-unknown` Rust target, put the pinned wasm-bindgen CLI
+on PATH (or set `WASM_BINDGEN`), then run:
+
+```sh
+scripts/build-library-wasm.sh
+br_version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bionic-reader"))')
+python3 scripts/package-library-candidate.py --version "$br_version" --output dist/library-api.tgz
+npm ci --ignore-scripts --no-audit --no-fund
+npm run check:node -- dist/library-api.tgz
+npm run check:example -- browser dist/library-api.tgz
+npm run check:example -- react dist/library-api.tgz
+npm run check:example -- next dist/library-api.tgz
+```
+
+The API-only tarball is an internal test candidate: it omits native CLI optional
+dependencies so Windows can test the public JavaScript API before publication.
+Release npm packages retain the native CLI dependencies. Build the shared Wasm
+payload before running `scripts/package-npm.sh --local`; see [npm packaging](#npm).
+For browser checks, install Playwright's Chromium first (`npx playwright install
+chromium`), or set `BIONIC_BROWSER=chromium BIONIC_BROWSER_CHANNEL=chrome` to
+use installed Chrome. The example checkers create isolated consumers and clean
+their own servers and directories.
+Set `BIONIC_REACT_VERSION=18.3.1` and `BIONIC_REACT_TYPES=18.3.31` for the React 18
+consumer checks. See CI for pinned React 19 and framework versions.
+
+To use the checkout directly as a Rust dependency, adjust this path in the
+consumer application's `Cargo.toml`:
+
+```toml
+[dependencies]
+bionic-reader = { path = "../bionic-reader", default-features = false, features = ["config"] }
+```
 
 ## Development and portable candidates
 

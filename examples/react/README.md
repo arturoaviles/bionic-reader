@@ -1,9 +1,12 @@
 # React server rendering and hydration
 
-Install the built npm tarball, build the client bundle, and start the example:
+Install the npm package, build the client bundle, and start the example:
+
+This example requires the forthcoming library release; the currently published
+npm package provides the CLI.
 
 ```sh
-npm install /absolute/path/to/bionic-reader-base-vVERSION.tgz
+npm install @arturoaviles/bionic-reader
 npm run build
 npm start
 ```

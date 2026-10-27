@@ -4,9 +4,8 @@ Use your package manager directly. GitHub Releases carry binaries, Linux system
 packages, Python wheels and Node packages; Homebrew/PyPI/npm publication is
 performed after a release is published and its channel is enabled.
 
-Homebrew installs prebuilt binaries from the public tap. Cargo Git-source
-installation builds from source. Other native commands in the README require
-the corresponding release assets or registry publication. See
+Homebrew installs prebuilt binaries from the public tap. Python, Node, and
+Cargo packages are published on PyPI, npm, and crates.io. See
 [publication setup](RELEASE.md#publishing-package-managers) for maintainer requirements.
 
 ## Homebrew
@@ -47,20 +46,7 @@ brew untap arturoaviles/tap
 
 ### Build from main
 
-To build the latest source instead of installing a prebuilt release, use this
-repository as a separate tap:
-
-```sh
-brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
-brew trust arturoaviles/bionic-reader
-brew install --HEAD bionic-reader
-```
-
-This installs Rust as a build dependency and compiles `main` using the checked-in
-`Cargo.lock`. On macOS, Xcode Command Line Tools are also required. Update this
-installation with `brew update` followed by `brew upgrade --fetch-HEAD bionic-reader`.
-To switch to the prebuilt channel, run `brew uninstall bionic-reader` and
-`brew untap arturoaviles/bionic-reader`, then follow the tap installation above.
+See [Homebrew source installation](BUILD.md#homebrew-from-main).
 
 ### Install a release formula locally
 
@@ -110,7 +96,7 @@ ARM64 Arch files require an Arch-derived distribution that supports ARM64.
 
 ## pip and uv
 
-After the PyPI channel has been published:
+Install from PyPI:
 
 ```sh
 # Use pip in an activated virtual environment.
@@ -131,7 +117,7 @@ the responsibility of pip/uv; do not use a separate Python installer.
 
 ## npm, Yarn and pnpm
 
-After the npm channel has been published:
+Install from npm:
 
 ```sh
 npm install --global @arturoaviles/bionic-reader
@@ -156,25 +142,22 @@ GitHub Packages is an optional second npm registry; it requires GitHub registry
 authentication even for public packages. Public npm is the normal installation
 route; do not silently change a user's global registry configuration.
 
-## Cargo and Snap
+## Cargo
+
+Install from crates.io:
 
 ```sh
-cargo install --git https://github.com/arturoaviles/bionic-reader.git --locked bionic-reader
+cargo install bionic-reader --locked
 ```
 
-Cargo builds for the host. Rust 1.85.1+ and C build tools are required. Add
-`--tag vX.Y.Z` for a published source version. See [BUILD.md](BUILD.md) for a
-checkout build and prerequisites.
+Rust 1.85.1+ and a C compiler/linker are required. Cargo selects the latest
+published package; keep `--locked` to use its validated dependency lockfile.
+See [BUILD.md](BUILD.md) for source installations and local packages.
 
-Snap currently uses a repository-built local file rather than the Snap Store:
+## Snap
 
-```sh
-sudo snap install --dangerous --classic ./dist/local/snap/bionic-reader_*.snap
-```
-
-Follow [the Snap build guide](BUILD.md#snap-ubuntu-2404) first. It selects the host
-architecture. Store publication requires classic-confinement approval and is not
-automatically enabled by these changes.
+Snap Store publication is not enabled. The [Snap guide](BUILD.md#snap-ubuntu-2404)
+contains the repository package workflow.
 
 ## Native archives
 
@@ -189,9 +172,8 @@ validation and signing/notarization remain release gates. Windows is unsupported
 
 Use the same manager for updates. Direct Linux package-file installs require
 downloading the next release and rerunning the manager command. `cargo install
---git https://github.com/arturoaviles/bionic-reader.git --locked --force
-bionic-reader` updates a Git-source install. Rebuild local Snap packages before
-reinstalling. Installations never activate reading sessions or edit startup files;
+bionic-reader --locked --force` updates a crates.io installation. For Snap, see
+the [build guide](BUILD.md#snap-ubuntu-2404). Installations never activate reading sessions or edit startup files;
 see [SHELL.md](SHELL.md) for explicit shell setup.
 
 ## Uninstall
