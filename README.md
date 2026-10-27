@@ -13,23 +13,25 @@ settings to find what feels comfortable; no reading-speed improvement is promise
 
 ## Installation
 
-**The first release and package-manager publications are pending.** Homebrew's
+**Prebuilt release assets and the Homebrew formula are pending.** Homebrew's
 source installation and Cargo's Git installation work now. The other commands
-below describe release packages and registry channels once published;
+below require the corresponding release assets or registry publication;
 [installation details](https://github.com/arturoaviles/bionic-reader/blob/main/docs/INSTALL.md)
 include direct-download alternatives and platform requirements.
 
 ### Homebrew
 
+The public tap is ready; the `bionic-reader` formula is awaiting publication.
+Once published:
+
 ```sh
-brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
-brew install --HEAD bionic-reader
+brew tap arturoaviles/tap
+brew install bionic-reader
 ```
 
-Homebrew builds from `main` and installs Rust as a build dependency. On macOS,
-Xcode Command Line Tools are also required. See the
+Homebrew selects the matching prebuilt binary. See the
 [Homebrew guide](https://github.com/arturoaviles/bionic-reader/blob/main/docs/INSTALL.md#homebrew)
-for updates, removal, and the planned prebuilt release channel.
+for updates, removal, and a source-build option before publication.
 
 ### Linux
 
