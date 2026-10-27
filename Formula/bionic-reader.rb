@@ -7,7 +7,8 @@ class BionicReader < Formula
   depends_on "rust" => :build
 
   def fetch
-    system "cargo", "fetch", *std_cargo_fetch_args
+    fetch_args = respond_to?(:std_cargo_fetch_args) ? std_cargo_fetch_args : ["--locked"]
+    system "cargo", "fetch", *fetch_args
   end
 
   def install
