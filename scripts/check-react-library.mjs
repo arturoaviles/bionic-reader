@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createReader } from '@arturoaviles/bionic-reader';
+import { BionicReaderProvider, BionicText } from '@arturoaviles/bionic-reader/react';
+
+const reader = await createReader();
+const present = (props) => createElement(BionicReaderProvider, { reader }, createElement(BionicText, props));
+const html = renderToStaticMarkup(present({ text: 'Hello world', id: 'reading' }));
+assert.match(html, /white-space:pre-wrap/);
+assert.match(html, /font-weight:700/);
+assert.match(html, /id="reading"/);
+assert.doesNotMatch(html, /<strong/);
+assert.throws(() => renderToStaticMarkup(createElement(BionicText, { text: 'Hello' })), { code: 'initialization_failed' });
+assert.throws(() => renderToStaticMarkup(createElement(BionicReaderProvider, { reader: Promise.resolve(reader) })), { code: 'initialization_failed' });
+assert.throws(() => renderToStaticMarkup(present({ text: '', dangerouslySetInnerHTML: { __html: '<script>bad</script>' } })), { code: 'invalid_input' });
+const literal = renderToStaticMarkup(present({ text: '<script> Hello\nworld', options: { enabled: false } }));
+assert.match(literal, /&lt;script&gt; Hello\nworld/);
+assert.doesNotMatch(literal, /<script>/);
+const custom = renderToStaticMarkup(present({ text: 'Hello', emphasisClassName: 'prefix', emphasisStyle: { color: 'red' } }));
+assert.match(custom, /class="prefix"/);
+assert.match(custom, /color:red/);
+const large = 'hello '.repeat(80000);
+const largeMarkup = renderToStaticMarkup(present({ text: large }));
+assert.equal(largeMarkup.replace(/<[^>]*>/g, ''), large);
+console.log('Installed React component SSR, literal text, styling, and readiness checks passed.');

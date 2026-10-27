@@ -74,6 +74,13 @@ filenames use the native architecture query shown above. Snap build instructions
 live in [BUILD.md](https://github.com/arturoaviles/bionic-reader/blob/main/docs/BUILD.md#snap-ubuntu-2404).
 You can also download native binaries from [GitHub Releases](https://github.com/arturoaviles/bionic-reader/releases).
 
+## Application libraries
+
+Use the same local transformation engine from Rust, Python, or JavaScript.
+The npm package also exposes a React component for rendering literal text with
+bionic emphasis. See the [library guide](docs/LIBRARY.md) for APIs, initialization,
+installed-package examples, and the release validation matrix.
+
 ## The reader
 
 ```sh

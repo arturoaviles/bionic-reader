@@ -64,7 +64,8 @@ reading speed.
 
 The release contains six native archives, six wheels, six standalone Node
 packages, six Linux system packages plus architecture-named aliases, seven npm
-registry tarballs, a generated Homebrew formula, six SBOMs, RELEASE-SOURCE.json
+registry tarballs, a generated Homebrew formula, six bundle SBOMs, a shared
+versioned library-performance JSON report, RELEASE-SOURCE.json
 and SHA256SUMS. Stable Linux asset names support native commands such as
 `dpkg --print-architecture`; SemVer remains in package metadata and release tags.
 The seven npm registry files are derived from the verified standalone files:

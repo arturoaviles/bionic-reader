@@ -27,7 +27,7 @@ done
 "$zsh_bin" -n integrations/zsh.sh
 "$fish_bin" --no-execute integrations/fish.fish
 
-node_files=(packaging/npm/bin/*.js)
+node_files=(packaging/npm/bin/*.js packaging/npm/lib/*.js packaging/npm/lib/*.cjs scripts/*.mjs)
 for source in "${node_files[@]}"; do
   node --check "$source"
 done

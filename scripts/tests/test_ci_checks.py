@@ -28,7 +28,7 @@ class GateTests(unittest.TestCase):
     def test_omitted_matrix_dependency_fails(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         policy["check_gate_config"](workflow)
-        broken = workflow.replace("needs: [rust, ", "needs: [", 1)
+        broken = workflow.replace("portable-core, rust, ", "portable-core, ", 1)
         with self.assertRaises(ValueError):
             policy["check_gate_config"](broken)
 

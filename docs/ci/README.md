@@ -74,8 +74,11 @@ MSRV source/Git/package installation intentionally has no restored cache.
 ## Candidate integrity
 
 Each native target's workflow artifact contains a flat bundle: archive, wheel, standalone Node tarball,
-`sbom.cdx.json` and relative-path `SHA256SUMS`. Binary-mode CycloneDX 1.5 SBOMs use
-the matching target and default feature configuration, excluding dev dependencies.
+`sbom.cdx.json`, shared `library-performance.json`, and relative-path `SHA256SUMS`.
+The CycloneDX 1.5 bundle inventory combines the native CLI default-feature graph,
+the native Python extension graph, and the wasm32 engine graph, excluding dev
+dependencies. Each embedded engine retains distinct dependency references. React
+is a consumer-supplied peer, rather than bundled third-party JavaScript.
 Checksums are generated after staging every file, then verified before extraction
 or installation. Local host-only wheels retain their existing installation checks.
 

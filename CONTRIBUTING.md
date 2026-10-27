@@ -4,6 +4,8 @@ Contributions should preserve the product decisions in [docs/design.md](docs/des
 
 Rust code follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html) and [Microsoft's Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html). Read [the project's Rust style policy](docs/rust-style.md) for its application to this Cargo CLI, documented exceptions, and automated enforcement.
 
+The [library guide](docs/LIBRARY.md) covers the shared engine, language bindings, installed-package checks, and SSR examples. The workspace default member is the root crate; use explicit binding packages when checking adapters.
+
 ## Development checks
 
 Use Rust 1.85.1 for the declared minimum compiler. The root Makefile works with GNU Make 3.81 or newer, including macOS's system Make. Start with:
@@ -27,9 +29,9 @@ The equivalent individual Rust checks are:
 ```sh
 cargo fmt --all -- --check
 cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
-cargo check --locked --all-targets
+cargo check --locked --workspace --all-targets
 cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 cargo test --locked --all-targets
@@ -216,7 +218,7 @@ make mutation-report MODULE=segmentation      # two workers, 45 minutes
 
 Weekly mutation campaigns cover settings, segmentation and the transformer. Surviving mutants and mutant timeouts remain advisory; failing baselines, invalid output and tool errors fail. Scheduled diagnostics have 14-day retention. Existing coverage floors (92% lines, 91% regions, 88% functions, 80% branches), memory limits and scan-work assertions remain mandatory. The 100% coverage target remains open.
 
-Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Windows and registry publication remain separate work. GitHub Release preparation is documented in [docs/RELEASE.md](docs/RELEASE.md).
+Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Native Windows CLI distribution and registry publication remain separate work. JavaScript API checks include Windows. GitHub Release preparation is documented in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Release and registry packages
 

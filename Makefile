@@ -37,11 +37,11 @@ fmt-check: ## Check Rust formatting without changing files.
 	$(CARGO) fmt --manifest-path fuzz/Cargo.toml --all -- --check
 
 check: ## Type-check every Rust target.
-	$(CARGO) check --locked --all-targets
+	$(CARGO) check --locked --workspace --all-targets
 	$(CARGO) check --locked --manifest-path fuzz/Cargo.toml --all-targets
 
 lint: ## Run Clippy with warnings denied.
-	$(CARGO) clippy --locked --all-targets -- -D warnings
+	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
 	$(CARGO) clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
 test: ## Run unit, integration, CLI, PTY, property, and benchmark smoke tests.

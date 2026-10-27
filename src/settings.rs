@@ -1,6 +1,6 @@
 //! Configuration types and loading for bionic reading behavior.
 //!
-//! [`Settings::load`] resolves built-in defaults, an optional TOML file, and explicit
+//! `Settings::load` (with the `native` feature) resolves defaults, an optional TOML file, and explicit
 //! overrides in that order. Command exclusions from the file and overrides are appended to
 //! the built-in exclusions and deduplicated.
 //!
@@ -15,12 +15,15 @@
 //! ```
 
 use std::collections::HashSet;
+#[cfg(feature = "native")]
 use std::env;
+#[cfg(feature = "native")]
 use std::fs;
+#[cfg(feature = "native")]
 use std::io;
+#[cfg(feature = "native")]
 use std::path::{Path, PathBuf};
 
-use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
@@ -29,8 +32,9 @@ use crate::Error;
 ///
 /// These three variants are the complete style policy: automatic terminal
 /// detection, unconditional emphasis, or passthrough.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Style {
     /// Enable emphasis when output is a terminal.
     #[default]
@@ -45,6 +49,7 @@ impl Style {
     /// Resolves terminal styling, honoring nonempty `NO_COLOR` and `TERM=dumb` in auto mode.
     /// An explicit `Always` enables styling even when these environment hints are set.
     #[must_use]
+    #[cfg(feature = "native")]
     pub fn enabled(self, is_terminal: bool) -> bool {
         match self {
             Self::Always => true,
@@ -59,8 +64,9 @@ impl Style {
 }
 
 /// Built-in fixation preferences, applied before explicit numeric settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Profile {
     /// Emphasize fewer, longer words with a shorter prefix.
     Subtle,
@@ -71,8 +77,9 @@ pub enum Profile {
 }
 
 /// The terminal attribute used to distinguish selected word prefixes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Emphasis {
     /// Use bold intensity, restoring the original bold and faint attributes.
     #[default]
@@ -84,8 +91,9 @@ pub enum Emphasis {
 }
 
 /// How input bytes should be interpreted.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum InputFormat {
     /// Ordinary text with the configured terminal-control policy.
     #[default]
@@ -97,8 +105,9 @@ pub enum InputFormat {
 }
 
 /// The representation emitted by document rendering.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum OutputFormat {
     /// Terminal emphasis, subject to the style policy.
     #[default]
@@ -112,8 +121,9 @@ pub enum OutputFormat {
 }
 
 /// Policy for control sequences supplied by a document.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum ControlPolicy {
     /// Permit presentation styling and safe hyperlinks; remove active controls.
     #[default]
@@ -256,6 +266,7 @@ impl Settings {
     ///
     /// Returns an error when a configuration file cannot be read or parsed, or
     /// when the resolved settings fail validation.
+    #[cfg(feature = "native")]
     pub fn load(explicit: Option<&Path>, overrides: &Overrides) -> Result<Self, Error> {
         let mut settings = Self::default();
         let path = match explicit {
@@ -318,7 +329,7 @@ impl Settings {
             .map_or(self.fraction, |rule| rule.fraction)
     }
 
-    fn apply_overrides(&mut self, overrides: &Overrides) {
+    pub(crate) fn apply_overrides(&mut self, overrides: &Overrides) {
         if let Some(profile) = overrides.profile {
             self.apply_profile(profile);
         }
@@ -421,6 +432,7 @@ fn append_unique(target: &mut Vec<String>, additions: &[String]) {
 }
 
 #[must_use]
+#[cfg(feature = "native")]
 fn default_config_path() -> Option<PathBuf> {
     if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
         let config_home = PathBuf::from(config_home);
@@ -433,7 +445,7 @@ fn default_config_path() -> Option<PathBuf> {
         .map(|home| home.join(".config/bionic-reader/config.toml"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::{Overrides, Settings};
     use std::error::Error as StdError;

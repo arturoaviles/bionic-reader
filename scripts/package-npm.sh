@@ -125,6 +125,23 @@ cp "$repo_root/LICENSE" "$stage/base/LICENSE"
 cp "$repo_root/packaging/config.example.toml" "$stage/base/share/bionic-reader/config.example.toml"
 cp -R "$repo_root/integrations" "$stage/base/share/bionic-reader/integrations"
 cp -R "$repo_root/completions" "$stage/base/share/bionic-reader/completions"
+[[ -f $repo_root/dist/library/lib/wasm/engine_bg.wasm ]] || {
+  printf 'Build the WebAssembly library payload before npm packaging\n' >&2
+  exit 66
+}
+cp -R "$repo_root/dist/library/lib" "$stage/base/lib"
+python3 - "$stage/base" "$version" <<'PY'
+import runpy
+import sys
+from pathlib import Path
+
+directory = Path(sys.argv[1])
+files = {
+    path.relative_to(directory).as_posix(): (path.read_bytes(), 0o644)
+    for path in (directory / "lib").rglob("*") if path.is_file()
+}
+runpy.run_path("scripts/package-release-node.py")["validate_library"](files, sys.argv[2])
+PY
 chmod 755 "$stage/base/bin/bionic-reader.js"
 
 python3 - "$repo_root/packaging/npm/package.json.in" "$stage/base/package.json" \

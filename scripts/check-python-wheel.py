@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a wheel candidate contains the binary and shared integration assets."""
+"""Check a wheel contains the importable library, binary, and integration assets."""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ def main() -> None:
 
     with zipfile.ZipFile(args.wheel) as wheel:
         files = set(wheel.namelist())
+    if "bionic_reader/__init__.py" not in files or not any(
+        name.startswith("bionic_reader/_native") and name.endswith((".so", ".pyd"))
+        for name in files
+    ):
+        raise SystemExit("wheel candidate has no importable native library")
     required_suffixes = {
         ".data/scripts/bionic-reader",
         ".data/data/share/bionic-reader/config.example.toml",

@@ -1,0 +1,146 @@
+{
+  "package_version": "0.1.0",
+  "measured_at": "2026-10-27T14:05:54.552Z",
+  "environment": {
+    "node": "v26.12.1",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "os_release": "27.0.0"
+  },
+  "artifact": {
+    "sha256": "3cbd62acc3935eb9c9982552e9eac6ebd7ccd19919d914db7f980c44dccfe943",
+    "raw_bytes": 3303732,
+    "gzip_level_9_bytes": 2185130,
+    "brotli_quality_11_bytes": 1878908
+  },
+  "methodology": "Installed package, full multilingual data, default balanced settings; five fresh Node processes for cold import/initialization, one warmup and fifteen samples per warm workload. Node local-file loading; browser network transfer is not measured.",
+  "cold": [
+    {
+      "import_ms": 2.467458999999998,
+      "initialize_ms": 17.397416000000003,
+      "process_wall_ms": 165.139792
+    },
+    {
+      "import_ms": 1.6152909999999991,
+      "initialize_ms": 12.609542000000005,
+      "process_wall_ms": 143.390625
+    },
+    {
+      "import_ms": 1.528417000000001,
+      "initialize_ms": 10.748665999999997,
+      "process_wall_ms": 108.61137500000001
+    },
+    {
+      "import_ms": 1.4774999999999991,
+      "initialize_ms": 11.232500000000002,
+      "process_wall_ms": 108.74366700000002
+    },
+    {
+      "import_ms": 1.3706669999999992,
+      "initialize_ms": 10.488917,
+      "process_wall_ms": 107.72141699999997
+    }
+  ],
+  "warm": [
+    {
+      "name": "ASCII prose",
+      "unit": "Reading documentation with balanced emphasis. ",
+      "repetitions": 256,
+      "input_utf8_bytes": 11776,
+      "operation": "render_html",
+      "samples_ms": [
+        1.6095420000000331,
+        0.8272920000000568,
+        0.7930410000000165,
+        0.7436669999999594,
+        0.7350410000000238,
+        0.734375,
+        0.7531250000000682,
+        0.8091249999999945,
+        0.8029160000000957,
+        0.784917000000064,
+        0.7709580000000642,
+        0.7687500000000682,
+        0.7761249999999791,
+        1.0074999999999363,
+        0.6612920000000031
+      ],
+      "output_units": 503040
+    },
+    {
+      "name": "ASCII prose",
+      "unit": "Reading documentation with balanced emphasis. ",
+      "repetitions": 256,
+      "input_utf8_bytes": 11776,
+      "operation": "segments",
+      "samples_ms": [
+        0.9569999999999936,
+        0.9761250000000246,
+        0.9893749999999955,
+        0.9865409999999883,
+        1.1807919999999967,
+        0.950458000000026,
+        1.003084000000058,
+        0.9900829999999132,
+        0.9529159999999592,
+        0.9511670000000549,
+        0.9536249999999882,
+        0.9857920000000604,
+        1.009166999999934,
+        0.9513749999999845,
+        0.9561670000000504
+      ],
+      "output_units": 38400
+    },
+    {
+      "name": "Multilingual prose",
+      "unit": "你好世界 ภาษาไทย مرحبا café café Привет 👨‍👩‍👧 ",
+      "repetitions": 128,
+      "input_utf8_bytes": 11648,
+      "operation": "render_html",
+      "samples_ms": [
+        5.5837080000000014,
+        5.566583000000037,
+        5.422916999999984,
+        5.3633330000000115,
+        5.299583999999982,
+        5.163583000000017,
+        5.286875000000009,
+        5.0952499999999645,
+        5.590041000000042,
+        5.13479099999995,
+        5.280499999999961,
+        5.437332999999967,
+        5.194208000000003,
+        5.175958000000037,
+        5.29970800000001
+      ],
+      "output_units": 349440
+    },
+    {
+      "name": "Multilingual prose",
+      "unit": "你好世界 ภาษาไทย مرحبا café café Привет 👨‍👩‍👧 ",
+      "repetitions": 128,
+      "input_utf8_bytes": 11648,
+      "operation": "segments",
+      "samples_ms": [
+        5.488624999999956,
+        5.456584000000021,
+        5.551000000000045,
+        5.469000000000051,
+        5.482124999999996,
+        5.087415999999962,
+        5.2909590000000435,
+        5.2806659999999965,
+        5.42837499999996,
+        5.151915999999915,
+        5.316584000000034,
+        5.510415999999964,
+        5.372165999999993,
+        5.375166999999919,
+        5.391208000000006
+      ],
+      "output_units": 30720
+    }
+  ]
+}

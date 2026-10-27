@@ -1,0 +1,390 @@
+{
+  "render": [
+    {
+      "name": "balanced HTML",
+      "text": "Hello world",
+      "format": "html",
+      "options": {},
+      "output": "<strong>Hel</strong>lo <strong>wor</strong>ld"
+    },
+    {
+      "name": "empty text",
+      "text": "",
+      "format": "html",
+      "options": {},
+      "output": ""
+    },
+    {
+      "name": "plain preserves layout",
+      "text": " Hello\tworld\r\n",
+      "format": "plain",
+      "options": {},
+      "output": " Hello\tworld\r\n"
+    },
+    {
+      "name": "ANSI emphasis",
+      "text": "Hello",
+      "format": "ansi",
+      "options": {},
+      "output": "\u001b[1mHel\u001b[22mlo"
+    },
+    {
+      "name": "escaped Markdown output",
+      "text": "Hello *world*",
+      "format": "markdown",
+      "options": {},
+      "output": "**Hel**lo \\***wor**ld\\*"
+    },
+    {
+      "name": "HTML literal content",
+      "text": "<hello> & 'world'",
+      "format": "html",
+      "options": {
+        "enabled": false
+      },
+      "output": "&lt;hello&gt; &amp; &#39;world&#39;"
+    },
+    {
+      "name": "combining accents",
+      "text": "café café",
+      "format": "html",
+      "options": {},
+      "output": "<strong>ca</strong>fé <strong>ca</strong>fé"
+    },
+    {
+      "name": "Cyrillic",
+      "text": "Привет",
+      "format": "html",
+      "options": {},
+      "output": "<strong>При</strong>вет"
+    },
+    {
+      "name": "joined emoji",
+      "text": "👨‍👩‍👧 hello",
+      "format": "html",
+      "options": {},
+      "output": "👨‍👩‍👧 <strong>hel</strong>lo"
+    },
+    {
+      "name": "strong profile",
+      "text": "reading",
+      "format": "html",
+      "options": {
+        "profile": "strong"
+      },
+      "output": "<strong>readi</strong>ng"
+    },
+    {
+      "name": "profile override",
+      "text": "reading",
+      "format": "html",
+      "options": {
+        "profile": "strong",
+        "fraction": 0.25
+      },
+      "output": "<strong>re</strong>ading"
+    },
+    {
+      "name": "subtle profile",
+      "text": "reading text again",
+      "format": "html",
+      "options": {
+        "profile": "subtle"
+      },
+      "output": "<strong>rea</strong>ding text <strong>ag</strong>ain"
+    },
+    {
+      "name": "minimum word length",
+      "text": "a to cat dogs",
+      "format": "html",
+      "options": {
+        "min_word_length": 4
+      },
+      "output": "a to cat <strong>do</strong>gs"
+    },
+    {
+      "name": "length rules",
+      "text": "tiny reading",
+      "format": "html",
+      "options": {
+        "length_rules": [
+          {
+            "max_length": 4,
+            "fraction": 1
+          }
+        ]
+      },
+      "output": "<strong>tiny</strong> <strong>read</strong>ing"
+    },
+    {
+      "name": "underline HTML",
+      "text": "reading",
+      "format": "html",
+      "options": {
+        "emphasis": "underline"
+      },
+      "output": "<u>read</u>ing"
+    },
+    {
+      "name": "reverse HTML",
+      "text": "reading",
+      "format": "html",
+      "options": {
+        "emphasis": "reverse"
+      },
+      "output": "<span class=\"bionic-reverse\">read</span>ing"
+    },
+    {
+      "name": "no emphasis still strips controls",
+      "text": "\u001b[2JHello",
+      "format": "plain",
+      "options": {
+        "enabled": false
+      },
+      "output": "Hello"
+    },
+    {
+      "name": "safe ANSI",
+      "text": "\u001b[2JHello",
+      "format": "ansi",
+      "options": {},
+      "output": "\u001b[1mHel\u001b[22mlo"
+    },
+    {
+      "name": "trusted cursor operation uses terminal passthrough",
+      "text": "\u001b[2JHello",
+      "format": "ansi",
+      "options": {
+        "input_format": "terminal",
+        "controls": "preserve"
+      },
+      "output": "\u001b[2JHello"
+    },
+    {
+      "name": "Markdown protects code",
+      "text": "# Hello `world`\n",
+      "format": "html",
+      "options": {
+        "input_format": "markdown"
+      },
+      "output": "<h1><strong>Hel</strong>lo <code>world</code></h1>\n"
+    },
+    {
+      "name": "Markdown plain retains source",
+      "text": "# Hello `world`\n",
+      "format": "plain",
+      "options": {
+        "input_format": "markdown"
+      },
+      "output": "# Hello `world`\n"
+    },
+    {
+      "name": "zero fraction",
+      "text": "Hello world",
+      "format": "html",
+      "options": {
+        "fraction": 0
+      },
+      "output": "Hello world"
+    },
+    {
+      "name": "frequency zero",
+      "text": "Hello",
+      "format": "html",
+      "options": {
+        "every": 0
+      },
+      "error": "invalid_input"
+    },
+    {
+      "name": "fraction out of range",
+      "text": "Hello",
+      "format": "html",
+      "options": {
+        "fraction": 2
+      },
+      "error": "invalid_input"
+    },
+    {
+      "name": "unsupported Markdown code emphasis",
+      "text": "`Hello`",
+      "format": "markdown",
+      "options": {
+        "input_format": "markdown",
+        "skip_code": false
+      },
+      "error": "invalid_input"
+    },
+    {
+      "name": "unknown option",
+      "text": "Hello",
+      "format": "html",
+      "options": {
+        "unknown_option": true
+      },
+      "error": "invalid_input"
+    },
+    {
+      "name": "Arabic word",
+      "text": "مرحبا",
+      "format": "html",
+      "options": {},
+      "output": "<strong>مرح</strong>با"
+    },
+    {
+      "name": "Chinese dictionary words",
+      "text": "你好世界",
+      "format": "html",
+      "options": {},
+      "output": "<strong>你</strong>好<strong>世</strong>界"
+    },
+    {
+      "name": "Thai dictionary words",
+      "text": "ภาษาไทย",
+      "format": "html",
+      "options": {},
+      "output": "<strong>ภา</strong>ษา<strong>ไท</strong>ย"
+    },
+    {
+      "name": "portable word-count range",
+      "text": "Hello",
+      "format": "html",
+      "options": {
+        "every": 4294967296
+      },
+      "error": "invalid_input"
+    }
+  ],
+  "segments": [
+    {
+      "name": "balanced segments",
+      "text": "Hello world",
+      "options": {},
+      "output": [
+        {
+          "text": "Hel",
+          "emphasized": true
+        },
+        {
+          "text": "lo ",
+          "emphasized": false
+        },
+        {
+          "text": "wor",
+          "emphasized": true
+        },
+        {
+          "text": "ld",
+          "emphasized": false
+        }
+      ]
+    },
+    {
+      "name": "frequency segments",
+      "text": "Hello world again",
+      "options": {
+        "every": 2
+      },
+      "output": [
+        {
+          "text": "Hel",
+          "emphasized": true
+        },
+        {
+          "text": "lo world ",
+          "emphasized": false
+        },
+        {
+          "text": "aga",
+          "emphasized": true
+        },
+        {
+          "text": "in",
+          "emphasized": false
+        }
+      ]
+    },
+    {
+      "name": "empty segments",
+      "text": "",
+      "options": {},
+      "output": []
+    },
+    {
+      "name": "layout segments",
+      "text": " Hello\nworld  ",
+      "options": {},
+      "output": [
+        {
+          "text": " ",
+          "emphasized": false
+        },
+        {
+          "text": "Hel",
+          "emphasized": true
+        },
+        {
+          "text": "lo\n",
+          "emphasized": false
+        },
+        {
+          "text": "wor",
+          "emphasized": true
+        },
+        {
+          "text": "ld  ",
+          "emphasized": false
+        }
+      ]
+    },
+    {
+      "name": "disabled segments are safe visible text",
+      "text": "\u001b[31mHello\u001b[0m",
+      "options": {
+        "enabled": false
+      },
+      "output": [
+        {
+          "text": "Hello",
+          "emphasized": false
+        }
+      ]
+    },
+    {
+      "name": "combining segment",
+      "text": "café",
+      "options": {},
+      "output": [
+        {
+          "text": "ca",
+          "emphasized": true
+        },
+        {
+          "text": "fé",
+          "emphasized": false
+        }
+      ]
+    },
+    {
+      "name": "Markdown code protection",
+      "text": "# Hello `world`\n",
+      "options": {
+        "input_format": "markdown"
+      },
+      "output": [
+        {
+          "text": "# ",
+          "emphasized": false
+        },
+        {
+          "text": "Hel",
+          "emphasized": true
+        },
+        {
+          "text": "lo `world`\n",
+          "emphasized": false
+        }
+      ]
+    }
+  ]
+}

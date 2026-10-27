@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_release import bundle
+from test_release import bundle, library_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 registry = runpy.run_path(str(ROOT / "scripts/package-registries.py"))
@@ -57,6 +57,10 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(len(manifest["optionalDependencies"]), 6)
             self.assertNotIn("bin/native/bionic-reader", base)
             self.assertFalse(manifest.get("scripts"))
+            self.assertEqual(manifest["exports"]["."]["import"], "./lib/node.js")
+            self.assertEqual(manifest["exports"]["./react"]["import"], "./lib/react.js")
+            self.assertEqual(manifest["engines"]["node"], ">=22")
+            self.assertIn("lib/wasm/engine_bg.wasm", base)
             actual = set()
             for path in (root / "npm").glob("*-native-*.tgz"):
                 native = registry["read_package"](path)
@@ -83,6 +87,11 @@ class PublicationTests(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            library = root / "library"
+            for name, (data, _) in library_fixture().items():
+                path = library / name.removeprefix("lib/")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
             for target, expected in (
                 ("x86_64-unknown-linux-musl", ["musl", "glibc"]),
                 ("aarch64-unknown-linux-musl", ["musl", "glibc"]),
@@ -97,7 +106,7 @@ class PublicationTests(unittest.TestCase):
                         member = tarfile.TarInfo(f"bionic-reader-0.1.0-{target}/{name}")
                         member.size = len(data)
                         output.addfile(member, io.BytesIO(data))
-                package = standalone["package"](archive, root / "standalone")
+                package = standalone["package"](archive, root / "standalone", library)
                 manifest = json.loads(
                     registry["read_package"](package)["package.json"][0]
                 )
@@ -131,6 +140,53 @@ class PublicationTests(unittest.TestCase):
             registry["write_package"](modified, files)
             with self.assertRaises(ValueError):
                 registry["registry_packages"](source, root / "npm", "0.1.0")
+
+    def test_registry_rejects_different_api_metadata(self):
+        for key, value in (
+            ("exports", {}),
+            ("engines", {"node": ">=26"}),
+            ("peerDependencies", {"react": "^19"}),
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source"
+                source.mkdir()
+                for target in registry["TARGETS"]:
+                    built = bundle(root / target, target)
+                    name = f"bionic-reader-v0.1.0-{target}.npm.tgz"
+                    (source / name).write_bytes((built / name).read_bytes())
+                changed = next(source.glob("*.tgz"))
+                files = registry["read_package"](changed)
+                manifest = json.loads(files["package.json"][0])
+                manifest[key] = value
+                files["package.json"] = (json.dumps(manifest).encode(), 0o644)
+                registry["write_package"](changed, files)
+                with self.assertRaisesRegex(ValueError, "metadata"):
+                    registry["registry_packages"](source, root / "npm", "0.1.0")
+
+    def test_registry_rejects_incomplete_or_mismatched_library_payloads(self):
+        for fault in ("missing", "version", "wasm"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source"
+                source.mkdir()
+                for target in registry["TARGETS"]:
+                    built = bundle(root / target, target)
+                    name = f"bionic-reader-v0.1.0-{target}.npm.tgz"
+                    (source / name).write_bytes((built / name).read_bytes())
+                changed = next(source.glob("*.tgz"))
+                files = registry["read_package"](changed)
+                if fault == "missing":
+                    del files["lib/react.js"]
+                elif fault == "version":
+                    identity = json.loads(files["lib/package.json"][0])
+                    identity["version"] = "0.2.0"
+                    files["lib/package.json"] = (json.dumps(identity).encode(), 0o644)
+                else:
+                    files["lib/wasm/engine_bg.wasm"] = (b"different engine", 0o644)
+                registry["write_package"](changed, files)
+                with self.assertRaises(ValueError):
+                    registry["registry_packages"](source, root / "npm", "0.1.0")
 
 
 if __name__ == "__main__":

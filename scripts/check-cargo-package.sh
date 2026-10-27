@@ -68,6 +68,7 @@ crate_path = Path(sys.argv[2])
 package_root = f"{sys.argv[3]}-{sys.argv[4]}"
 source_roots = {"benches", "completions", "integrations", "src", "tests"}
 support_files = {
+    "examples/reading.rs",
     "Cargo.lock",
     "Cargo.toml",
     "LICENSE",
@@ -137,6 +138,8 @@ extracted_package="$temporary/extracted/$package_name-$package_version"
   exit 1
 }
 
+cargo run --locked --manifest-path "$extracted_package/Cargo.toml" \
+  --no-default-features --example reading
 cargo install --path "$extracted_package" --locked --root "$temporary/install-root"
 installed_binary="$temporary/install-root/bin/bionic-reader"
 [[ -x $installed_binary ]] || {

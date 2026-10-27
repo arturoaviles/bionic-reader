@@ -37,6 +37,7 @@ pub struct Error {
 }
 
 impl Error {
+    #[cfg(feature = "cli")]
     pub(crate) fn new(message: String) -> Self {
         Self::with_kind(message, None, false, false)
     }
@@ -45,14 +46,17 @@ impl Error {
         Self::with_kind(message, None, true, false)
     }
 
+    #[cfg(any(feature = "native", test))]
     pub(crate) fn with_source(message: String, source: impl Into<BoxedError>) -> Self {
         Self::with_kind(message, Some(source.into()), false, true)
     }
 
+    #[cfg(any(feature = "cli", test))]
     pub(crate) fn with_source_hidden(message: String, source: impl Into<BoxedError>) -> Self {
         Self::with_kind(message, Some(source.into()), false, false)
     }
 
+    #[cfg(any(feature = "native", test))]
     pub(crate) fn invalid_input_with_source_hidden(
         message: String,
         source: impl Into<BoxedError>,
@@ -107,6 +111,7 @@ impl Error {
         self.invalid_input
     }
 
+    #[cfg(any(feature = "native", test))]
     pub(crate) fn context(mut self, message: String) -> Self {
         if self.message.is_empty() {
             self.message = message;

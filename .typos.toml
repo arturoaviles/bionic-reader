@@ -8,3 +8,8 @@ documen = "documen"
 thr = "thr"
 fpr = "fpr"
 Pn = "Pn"
+
+# Expected bionic word fragments in shared API conformance fixtures.
+Hel = "Hel"
+hel = "hel"
+ading = "ading"

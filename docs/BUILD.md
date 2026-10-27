@@ -190,7 +190,7 @@ To remove this installation later, run `sudo snap remove bionic-reader`.
 
 ### pip
 
-On macOS or Linux, build the wheel from the checkout with Python 3.9 or newer, maturin 1.15.0, and uv 0.13.5 (the build script also runs pip/uv installation checks):
+On macOS or Linux, build the wheel from the checkout with Python 3.11 or newer, maturin 1.15.0, and uv 0.13.5 (the build script also runs pip/uv installation checks):
 
 ```sh
 python3 -m venv .venv
@@ -219,11 +219,11 @@ uv tool update-shell
 
 To remove this installation later, run `uv tool uninstall bionic-reader`.
 
-The wheel contains the executable, configuration example, integrations, and completions. Host-local wheels are built for this machine; portable release-wheel builds are a separate maintainer workflow.
+The wheel contains the native Python library, executable, configuration example, integrations, and completions. See [library usage](LIBRARY.md#python) for imports. Host-local wheels are built for this machine; portable release-wheel builds are a separate maintainer workflow.
 
 ### npm
 
-Requires Node.js 24.11.1 or newer and npm. Build a host-local archive, then create the local Node tarballs:
+Requires Node.js 22 or newer and npm. Build the shared WebAssembly payload with wasm-bindgen 0.2.129 first (see [library builds](LIBRARY.md#build-and-validate-installed-packages)), then build a host-local archive and create the local Node tarballs:
 
 ```sh
 scripts/build-local-archive.sh
