@@ -4,28 +4,32 @@ Use your package manager directly. GitHub Releases carry binaries, Linux system
 packages, Python wheels and Node packages; Homebrew/PyPI/npm publication is
 performed after a release is published and its channel is enabled.
 
-**Prebuilt release assets and the Homebrew formula are pending.** Homebrew source
-installation and Cargo Git-source installation work now. The other native
-commands in the README require the corresponding release assets or registry
-publication. See
+Homebrew installs prebuilt binaries from the public tap. Cargo Git-source
+installation builds from source. Other native commands in the README require
+the corresponding release assets or registry publication. See
 [publication setup](RELEASE.md#publishing-package-managers) for maintainer requirements.
 
 ## Homebrew
 
-The public [Homebrew tap](https://github.com/arturoaviles/homebrew-tap) is ready,
-but its `bionic-reader` formula has not been published yet. Once published, use
-these commands on macOS or GNU/Linux:
+On macOS or GNU/Linux, add and trust the public
+[Homebrew tap](https://github.com/arturoaviles/homebrew-tap), then install:
 
 ```sh
 brew tap arturoaviles/tap
+brew trust arturoaviles/tap
 brew install bionic-reader
+```
+
+Verify the installation:
+
+```sh
 brew test bionic-reader
 bionic-reader --version
 ```
 
 The formula selects the matching CPU/OS archive and verifies its digest. Rust
-and `--HEAD` are unnecessary for this prebuilt installation. Add the tap only
-once; package commands then use just `bionic-reader`.
+and `--HEAD` are unnecessary for this prebuilt installation. Add and trust the
+tap only once; package commands then use just `bionic-reader`.
 
 To update:
 
@@ -41,26 +45,27 @@ brew uninstall bionic-reader
 brew untap arturoaviles/tap
 ```
 
-### Build from main before formula publication
+### Build from main
 
-To install from source while the release formula is pending, use this repository
-as a separate tap:
+To build the latest source instead of installing a prebuilt release, use this
+repository as a separate tap:
 
 ```sh
 brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
+brew trust arturoaviles/bionic-reader
 brew install --HEAD bionic-reader
 ```
 
 This installs Rust as a build dependency and compiles `main` using the checked-in
 `Cargo.lock`. On macOS, Xcode Command Line Tools are also required. Update this
 installation with `brew update` followed by `brew upgrade --fetch-HEAD bionic-reader`.
-To switch to the prebuilt channel later, run `brew uninstall bionic-reader` and
+To switch to the prebuilt channel, run `brew uninstall bionic-reader` and
 `brew untap arturoaviles/bionic-reader`, then follow the tap installation above.
 
 ### Install a release formula locally
 
-Once a GitHub release includes `bionic-reader.rb` and its native archives, you
-can also install that prebuilt formula using a local tap before tap publication:
+You can also install a GitHub release's `bionic-reader.rb` formula and its native
+archives using a local tap:
 
 ```sh
 brew tap-new arturoaviles/bionic-reader-local

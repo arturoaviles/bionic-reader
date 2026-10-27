@@ -89,8 +89,9 @@ The publishing workflow is ready locally, but external ownership and credentials
 must be configured by the maintainer. The public PyPI `bionic-reader` and npm
 `@arturoaviles/bionic-reader` endpoints returned 404 during this review; that does
 not reserve either name or prove account ownership. The public
-`arturoaviles/homebrew-tap` repository now exists; its `bionic-reader` formula
-still needs to be published.
+`arturoaviles/homebrew-tap` repository contains the published `bionic-reader`
+formula. Users add and trust it with `brew tap arturoaviles/tap` and
+`brew trust arturoaviles/tap`, then run `brew install bionic-reader`.
 Do not enable a channel before creating/owning its destination.
 
 | Channel | Repository variable | External setup |

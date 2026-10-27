@@ -13,25 +13,22 @@ settings to find what feels comfortable; no reading-speed improvement is promise
 
 ## Installation
 
-**Prebuilt release assets and the Homebrew formula are pending.** Homebrew's
-source installation and Cargo's Git installation work now. The other commands
-below require the corresponding release assets or registry publication;
+Install with your package manager using the commands below. Homebrew installs
+prebuilt binaries; Cargo's Git installation builds from source. See
 [installation details](https://github.com/arturoaviles/bionic-reader/blob/main/docs/INSTALL.md)
-include direct-download alternatives and platform requirements.
+for channel availability, direct-download alternatives, and platform requirements.
 
 ### Homebrew
 
-The public tap is ready; the `bionic-reader` formula is awaiting publication.
-Once published:
-
 ```sh
 brew tap arturoaviles/tap
+brew trust arturoaviles/tap
 brew install bionic-reader
 ```
 
 Homebrew selects the matching prebuilt binary. See the
 [Homebrew guide](https://github.com/arturoaviles/bionic-reader/blob/main/docs/INSTALL.md#homebrew)
-for updates, removal, and a source-build option before publication.
+for updates, removal, and a source-build option.
 
 ### Linux
 
