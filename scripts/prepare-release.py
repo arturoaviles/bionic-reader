@@ -69,7 +69,15 @@ def stage_bundle(bundle: Path, output: Path, version: str, target: str) -> None:
         name for name in names if name.endswith((".deb", ".rpm", ".pkg.tar.zst"))
     }
     node = f"bionic-reader-v{version}-{target}.npm.tgz"
-    expected = {archive, node, "SHA256SUMS", "sbom.cdx.json", *wheels, *packages}
+    expected = {
+        archive,
+        node,
+        "SHA256SUMS",
+        "sbom.cdx.json",
+        "library-performance.json",
+        *wheels,
+        *packages,
+    }
     if names != expected or len(wheels) != 1:
         raise ValueError(f"Incomplete or unexpected target bundle: {target}")
     gnu = target.endswith("-linux-gnu")
@@ -81,16 +89,39 @@ def stage_bundle(bundle: Path, output: Path, version: str, target: str) -> None:
         )
     ):
         raise ValueError(f"Missing or unexpected system packages: {target}")
+    registry = runpy.run_path(str(ROOT / "scripts/package-registries.py"))
+    library = registry["read_package"](bundle / node)
+    registry["node_package"]["validate_library"](library, version)
+    report = json.loads((bundle / "library-performance.json").read_text())
+    identity = json.loads(library["lib/package.json"][0])
+    if (
+        report.get("package_version") != version
+        or report.get("artifact", {}).get("sha256") != identity["wasm_sha256"]
+    ):
+        raise ValueError("Performance report does not describe the bundled library")
+    if (
+        not report.get("cold")
+        or not report.get("warm")
+        or not report.get("environment")
+    ):
+        raise ValueError("Performance report is missing measurements or environment")
     for source in sorted(bundle.iterdir()):
         if source.name == "SHA256SUMS":
             continue
         name = (
-            f"bionic-reader-v{version}-{target}.sbom.cdx.json"
+            f"bionic-reader-v{version}-library-performance.json"
+            if source.name == "library-performance.json"
+            else f"bionic-reader-v{version}-{target}.sbom.cdx.json"
             if source.name == "sbom.cdx.json"
             else source.name
         )
         destination = output / name
         if destination.exists():
+            if (
+                source.name == "library-performance.json"
+                and destination.read_bytes() == source.read_bytes()
+            ):
+                continue
             raise ValueError(f"Duplicate release asset: {name}")
         shutil.copyfile(source, destination)
 

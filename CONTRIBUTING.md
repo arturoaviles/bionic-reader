@@ -4,6 +4,8 @@ Contributions should preserve the product decisions in [docs/design.md](docs/des
 
 Rust code follows [Google's Rust style guide](https://google.github.io/styleguide/rustguide.html) and [Microsoft's Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html). Read [the project's Rust style policy](docs/rust-style.md) for its application to this Cargo CLI, documented exceptions, and automated enforcement.
 
+The [library guide](docs/LIBRARY.md) covers the shared engine, language bindings, installed-package checks, and SSR examples. The workspace default member is the root crate; use explicit binding packages when checking adapters.
+
 ## Development checks
 
 Use Rust 1.85.1 for the declared minimum compiler. The root Makefile works with GNU Make 3.81 or newer, including macOS's system Make. Start with:
@@ -27,9 +29,9 @@ The equivalent individual Rust checks are:
 ```sh
 cargo fmt --all -- --check
 cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
-cargo check --locked --all-targets
+cargo check --locked --workspace --all-targets
 cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 cargo test --locked --all-targets
@@ -118,7 +120,7 @@ gitleaks git --log-opts="--all" --redact=100 --no-banner --exit-code=1 .
 
 ## Cargo crate validation
 
-Cargo currently installs from this checkout, its Git source, or an extracted local `.crate`; no Bionic Reader package has been published to crates.io. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling. The development Makefile belongs to the Git checkout; packaged-source tests run with Cargo directly.
+Bionic Reader is published on crates.io. Contributors can also validate installations from this checkout, its Git source, or an extracted local `.crate`. The manifest includes the Rust source, embedded shell integrations, framework adapters, completions, configuration example, license, README, tests, and their support files. Its explicit file list excludes developer state and unrelated distribution tooling. The development Makefile belongs to the Git checkout; packaged-source tests run with Cargo directly.
 
 From a clean checkout, run:
 
@@ -149,7 +151,7 @@ scripts/build-release.sh x86_64-unknown-linux-musl
 scripts/build-release.sh aarch64-unknown-linux-musl
 ```
 
-With no arguments it attempts all targets and stops if the current host lacks the required build support. Build macOS artifacts on matching Intel and Apple Silicon macOS runners. GNU Linux candidates use cargo-zigbuild 0.23.4 with Zig 0.15.1 and are checked for GLIBC symbol versions above 2.28. Musl candidates need a matching Linux host with `musl-gcc`. `SOURCE_DATE_EPOCH` can be set to reproduce archive timestamps; the default comes from the current Git commit. Candidate archives and checksums are written under `dist/candidates/v<VERSION>/`.
+With no arguments it attempts all targets and stops if the current host lacks the required build support. Build macOS artifacts on matching Intel and Apple Silicon macOS runners. GNU Linux candidates use cargo-zigbuild 0.23.4 with Zig 0.15.1 and are checked for GLIBC symbol versions above 2.28. Musl CLI candidates need a matching Linux host with `musl-gcc`; their Python extensions use Zig 0.15.1 to avoid linking glibc runtime libraries. `SOURCE_DATE_EPOCH` can be set to reproduce archive timestamps; the default comes from the current Git commit. Candidate archives and checksums are written under `dist/candidates/v<VERSION>/`.
 
 `scripts/package-linux.sh TARGET` converts a built GNU candidate into deb, rpm, and Arch Linux packages with nFPM 2.47.0. It includes the README, license, config example, shell integration/framework adapters, and shell completions; it does not run installation scripts or edit user shell configuration. `scripts/package-manager-install-smoke.sh` builds a local GNU candidate, creates a temporary signing key inside each disposable container, generates signed APT/DNF/pacman repositories, and installs and exercises the package in Debian, Fedora, and Arch containers. It needs Docker, cargo-zigbuild 0.23.4, Zig 0.15.1, and nFPM 2.47.0. CI passes `PACKAGE_INPUT_DIR` pointing to the checksum-verified GNU x86-64 target bundle, so the containers install the exact direct-download package files. Without that variable, the script builds local candidates first. CI runs this against the current official container images.
 
@@ -216,7 +218,7 @@ make mutation-report MODULE=segmentation      # two workers, 45 minutes
 
 Weekly mutation campaigns cover settings, segmentation and the transformer. Surviving mutants and mutant timeouts remain advisory; failing baselines, invalid output and tool errors fail. Scheduled diagnostics have 14-day retention. Existing coverage floors (92% lines, 91% regions, 88% functions, 80% branches), memory limits and scan-work assertions remain mandatory. The 100% coverage target remains open.
 
-Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Windows and registry publication remain separate work. GitHub Release preparation is documented in [docs/RELEASE.md](docs/RELEASE.md).
+Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Native Windows CLI distribution and registry publication remain separate work. JavaScript API checks include Windows. GitHub Release preparation is documented in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Release and registry packages
 

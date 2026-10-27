@@ -1,6 +1,6 @@
 [package]
 name = "bionic-reader"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.85.1"
 description = "Configurable bionic reading for text streams and interactive shells"
@@ -16,6 +16,7 @@ include = [
     "/LICENSE",
     "src/**",
     "benches/**",
+    "/examples/reading.rs",
     "tests/**",
     "completions/**",
     "integrations/**",
@@ -24,22 +25,42 @@ include = [
     "scripts/create_archive.py",
 ]
 
+[workspace]
+members = ["bindings/python", "bindings/wasm"]
+default-members = ["."]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+
+[features]
+default = ["cli"]
+config = ["dep:toml"]
+native = ["config", "dep:tempfile"]
+cli = ["native", "dep:clap", "dep:clap_complete", "dep:libc", "dep:portable-pty", "dep:shell-words", "dep:signal-hook", "dep:unicode-width"]
+
+[[bin]]
+name = "bionic-reader"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-clap_complete = "4.5"
+clap = { version = "4.5", features = ["derive"], optional = true }
+clap_complete = { version = "4.5", optional = true }
 icu_segmenter = "=2.1.2"
-libc = "0.2"
-portable-pty = "0.9"
+libc = { version = "0.2", optional = true }
+portable-pty = { version = "0.9", optional = true }
 pulldown-cmark = { version = "=0.13.5", default-features = false, features = ["html"] }
 serde = { version = "1", features = ["derive"] }
-shell-words = "1"
-signal-hook = "0.4"
-tempfile = "3"
-toml = "1.1"
+shell-words = { version = "1", optional = true }
+signal-hook = { version = "0.4", optional = true }
+tempfile = { version = "3", optional = true }
+toml = { version = "1.1", optional = true }
 unicode-segmentation = "1.12"
-unicode-width = "=0.2.2"
+unicode-width = { version = "=0.2.2", optional = true }
 
 [dev-dependencies]
+serde_json = "1"
 divan = "=0.1.21"
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 
@@ -100,5 +121,60 @@ missing_panics_doc = "deny"
 lto = "thin"
 strip = true
 
+# Rust's Mach-O stripper can emit a string table rejected by current macOS dyld.
+# Keep the extension loadable; installed-wheel tests exercise the actual artifact.
+# https://github.com/rust-lang/rust/issues/157750
+[profile.python-wheel]
+inherits = "release"
+strip = false
+
 [profile.bench]
 debug = 1
+
+[[test]]
+name = "cli"
+required-features = ["cli"]
+
+[[test]]
+name = "completions"
+required-features = ["cli"]
+
+[[test]]
+name = "distribution"
+required-features = ["cli"]
+
+[[test]]
+name = "documents"
+required-features = ["cli"]
+
+[[test]]
+name = "e2e"
+required-features = ["cli"]
+
+[[test]]
+name = "frameworks"
+required-features = ["cli"]
+
+[[test]]
+name = "preferences"
+required-features = ["cli"]
+
+[[test]]
+name = "properties"
+required-features = ["cli"]
+
+[[test]]
+name = "reader"
+required-features = ["cli"]
+
+[[test]]
+name = "session"
+required-features = ["cli"]
+
+[[test]]
+name = "stream_regressions"
+required-features = ["cli"]
+
+[[test]]
+name = "terminal"
+required-features = ["cli"]

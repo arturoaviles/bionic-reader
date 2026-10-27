@@ -7,7 +7,7 @@ name = "bionic-reader"
 dynamic = ["version"]
 description = "Local word-prefix emphasis for text streams and terminal sessions"
 readme = "../../README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "arturoaviles and contributors" }]
 classifiers = [
@@ -20,9 +20,11 @@ classifiers = [
 ]
 
 [tool.maturin]
-bindings = "bin"
-manifest-path = "../../Cargo.toml"
+bindings = "pyo3"
+module-name = "bionic_reader._native"
+python-source = "."
+manifest-path = "../../bindings/python/Cargo.toml"
 locked = true
-profile = "release"
-strip = true
+profile = "python-wheel"
+strip = false
 data = "bionic_reader.data"

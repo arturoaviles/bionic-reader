@@ -1,0 +1,15 @@
+[package]
+name = "bionic-reader-wasm"
+version.workspace = true
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bionic-reader = { path = "../..", default-features = false, features = ["config"] }
+serde_json = "1"
+wasm-bindgen = "=0.2.129"

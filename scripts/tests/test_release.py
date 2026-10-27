@@ -1,5 +1,6 @@
 """Regressions for release source validation and complete candidate promotion."""
 
+import hashlib
 import json
 import os
 import runpy
@@ -17,6 +18,35 @@ registry = runpy.run_path(str(ROOT / "scripts/package-registries.py"))
 TARGET = "aarch64-apple-darwin"
 
 
+def library_fixture():
+    wasm = b"\0asm\x01\0\0\0"
+    files = {
+        name: (b"shared library fixture", 0o644)
+        for name in (
+            "lib/index.d.ts",
+            "lib/runtime.js",
+            "lib/node.js",
+            "lib/node.cjs",
+            "lib/browser.js",
+            "lib/react.js",
+            "lib/react.cjs",
+            "lib/react.d.ts",
+            "lib/wasm/engine.js",
+            "lib/wasm/engine.d.ts",
+            "lib/wasm/engine_bg.wasm.d.ts",
+        )
+    }
+    files["lib/wasm/engine_bg.wasm"] = (wasm, 0o644)
+    files["lib/version.js"] = (b'export const VERSION = "0.1.0";\n', 0o644)
+    files["lib/package.json"] = (
+        json.dumps(
+            {"version": "0.1.0", "wasm_sha256": hashlib.sha256(wasm).hexdigest()}
+        ).encode(),
+        0o644,
+    )
+    return files
+
+
 def bundle(root, target=TARGET):
     root.mkdir()
     for name in (
@@ -26,16 +56,31 @@ def bundle(root, target=TARGET):
     ):
         (root / name).write_bytes(b"verified bytes")
     system, cpu, libc = registry["TARGETS"][target]
+    report = {
+        "package_version": "0.1.0",
+        "artifact": {"sha256": hashlib.sha256(b"\0asm\x01\0\0\0").hexdigest()},
+        "cold": [{"initialize_ms": 1}],
+        "warm": [{"samples_ms": [1]}],
+        "environment": {"node": "fixture"},
+    }
+    (root / "library-performance.json").write_text(json.dumps(report))
+    manifest = json.loads(
+        (ROOT / "packaging/npm/package.json.in")
+        .read_text()
+        .replace("@VERSION@", "0.1.0")
+    )
+    manifest.update({"os": [system], "cpu": [cpu]})
     registry["write_package"](
         root / f"bionic-reader-v0.1.0-{target}.npm.tgz",
         {
             "package.json": (
-                json.dumps({"version": "0.1.0", "os": [system], "cpu": [cpu]}).encode(),
+                json.dumps(manifest).encode(),
                 0o644,
             ),
             "bin/native/bionic-reader": (b"verified native executable", 0o755),
             "bin/bionic-reader.js": (b"shared verified launcher", 0o755),
             "LICENSE": (b"MIT", 0o644),
+            **library_fixture(),
         },
     )
     checksums(root, False)
@@ -174,7 +219,7 @@ class ReleaseTests(unittest.TestCase):
                     else:
                         release["main"]()
                         checksums(output, True)
-                        self.assertEqual(len(list(output.iterdir())), 46)
+                        self.assertEqual(len(list(output.iterdir())), 47)
                         self.assertEqual(
                             github_output.read_text(), "tag=v0.1.0\nsha=abc\n"
                         )
@@ -183,10 +228,10 @@ class ReleaseTests(unittest.TestCase):
                             for call in calls.call_args_list
                             if call.args[0][:3] == ["gh", "attestation", "verify"]
                         ]
-                        self.assertEqual(len(provenance_calls), 30)
+                        self.assertEqual(len(provenance_calls), 36)
 
     def test_tampered_incomplete_or_unexpected_bundles_fail(self):
-        for failure in ("tampered", "missing", "extra", "gnu-packages"):
+        for failure in ("tampered", "missing", "extra", "gnu-packages", "report"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
                 root = Path(d)
                 target = (
@@ -203,6 +248,11 @@ class ReleaseTests(unittest.TestCase):
                     checksums(source, False)
                 elif failure == "extra":
                     (source / "extra.txt").write_bytes(b"unexpected")
+                    checksums(source, False)
+                elif failure == "report":
+                    (source / "library-performance.json").write_text(
+                        '{"package_version":"0.2.0"}'
+                    )
                     checksums(source, False)
                 with self.assertRaises(ValueError):
                     release["stage_bundle"](source, output, "0.1.0", target)

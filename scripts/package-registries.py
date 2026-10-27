@@ -12,7 +12,8 @@ import tarfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGETS = runpy.run_path(str(ROOT / "scripts/package-release-node.py"))["TARGETS"]
+node_package = runpy.run_path(str(ROOT / "scripts/package-release-node.py"))
+TARGETS = node_package["TARGETS"]
 
 
 def read_package(path: Path) -> dict[str, tuple[bytes, int]]:
@@ -61,6 +62,7 @@ def registry_packages(source: Path, output: Path, version: str) -> None:
         raise ValueError("Registry package output must be empty")
     optional = {}
     base_files = None
+    base_manifest = None
     repository = {
         "type": "git",
         "url": "git+https://github.com/arturoaviles/bionic-reader.git",
@@ -68,12 +70,22 @@ def registry_packages(source: Path, output: Path, version: str) -> None:
     for target, (system, cpu, libc) in TARGETS.items():
         files = read_package(source / f"bionic-reader-v{version}-{target}.npm.tgz")
         manifest = json.loads(files.pop("package.json")[0])
+        node_package["validate_library"](files, version)
         if (
             manifest.get("version") != version
             or manifest.get("os") != [system]
             or manifest.get("cpu") != [cpu]
         ):
             raise ValueError(f"Native package identity mismatch: {target}")
+        shared_manifest = {
+            key: value
+            for key, value in manifest.items()
+            if key not in {"os", "cpu", "libc"}
+        }
+        if base_manifest is None:
+            base_manifest = shared_manifest
+        elif base_manifest != shared_manifest:
+            raise ValueError("Standalone packages disagree on shared API metadata")
         binary = files.pop("bin/native/bionic-reader")
         if not binary[1] & 0o111:
             raise ValueError(f"Nonexecutable native package: {target}")
@@ -105,17 +117,12 @@ def registry_packages(source: Path, output: Path, version: str) -> None:
                 "LICENSE": files["LICENSE"],
             },
         )
-    if base_files is None:
+    if base_files is None or base_manifest is None:
         raise ValueError("No native packages")
-    base = {
-        "name": "@arturoaviles/bionic-reader",
-        "version": version,
-        "license": "MIT",
-        "repository": repository,
-        "engines": {"node": ">=18"},
-        "bin": {"bionic-reader": "bin/bionic-reader.js"},
-        "optionalDependencies": optional,
-    }
+    # Preserve API exports/types and runtime requirements from the verified payload,
+    # rather than reconstructing metadata from a potentially newer checkout.
+    base = base_manifest
+    base.update({"repository": repository, "optionalDependencies": optional})
     base_files["package.json"] = (json.dumps(base, indent=2).encode() + b"\n", 0o644)
     write_package(output / f"bionic-reader-npm-base-v{version}.tgz", base_files)
 

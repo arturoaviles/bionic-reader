@@ -19,8 +19,9 @@ def main() -> None:
         encoding="utf-8"
     )
     require(
-        'bindings = "bin"' in python_project,
-        "Python must wrap the Rust binary",
+        'bindings = "pyo3"' in python_project
+        and 'module-name = "bionic_reader._native"' in python_project,
+        "Python must expose the native library binding",
     )
     require("locked = true" in python_project, "Python builds must honor Cargo.lock")
 

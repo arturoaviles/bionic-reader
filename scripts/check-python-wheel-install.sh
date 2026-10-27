@@ -36,6 +36,7 @@ verify_installed_binary() {
 python3 -m venv "$temporary/pip-env"
 "$temporary/pip-env/bin/python" -m pip install --no-index --no-deps --force-reinstall "$wheel"
 verify_installed_binary "$temporary/pip-env/bin/bionic-reader"
+"$temporary/pip-env/bin/python" "$repo_root/scripts/check-python-library.py" "$repo_root/tests/fixtures/library.json"
 "$temporary/pip-env/bin/python" -m pip uninstall --yes bionic-reader
 [[ ! -e $temporary/pip-env/bin/bionic-reader ]]
 
@@ -45,6 +46,7 @@ uv venv "$temporary/uv-env"
 uv pip install --no-index --no-deps --find-links "$output_dir" \
   --python "$temporary/uv-env/bin/python" "bionic-reader==$version"
 verify_installed_binary "$temporary/uv-env/bin/bionic-reader"
+"$temporary/uv-env/bin/python" "$repo_root/scripts/check-python-library.py" "$repo_root/tests/fixtures/library.json"
 uv pip uninstall --python "$temporary/uv-env/bin/python" bionic-reader
 [[ ! -e $temporary/uv-env/bin/bionic-reader ]]
 uv tool install --no-index --find-links "$output_dir" \

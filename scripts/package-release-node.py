@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import io
 import json
 import re
@@ -20,8 +21,44 @@ TARGETS = {
     "aarch64-unknown-linux-musl": ("linux", "arm64", "musl"),
 }
 
+LIBRARY_FILES = {
+    "lib/package.json",
+    "lib/version.js",
+    "lib/index.d.ts",
+    "lib/runtime.js",
+    "lib/node.js",
+    "lib/node.cjs",
+    "lib/browser.js",
+    "lib/react.js",
+    "lib/react.cjs",
+    "lib/react.d.ts",
+    "lib/wasm/engine.js",
+    "lib/wasm/engine.d.ts",
+    "lib/wasm/engine_bg.wasm",
+    "lib/wasm/engine_bg.wasm.d.ts",
+}
 
-def package(archive: Path, output: Path) -> Path:
+
+def validate_library(files: dict[str, tuple[bytes, int]], version: str) -> None:
+    """Reject incomplete, stale, or corrupted compiled library payloads."""
+    missing = LIBRARY_FILES - files.keys()
+    if missing:
+        raise ValueError("Missing library payload: " + ", ".join(sorted(missing)))
+    identity = json.loads(files["lib/package.json"][0])
+    wasm = files["lib/wasm/engine_bg.wasm"][0]
+    if identity.get("version") != version:
+        raise ValueError("Library payload version does not match the package")
+    if (
+        not wasm.startswith(b"\0asm\x01\0\0\0")
+        or identity.get("wasm_sha256") != hashlib.sha256(wasm).hexdigest()
+    ):
+        raise ValueError("Library WebAssembly payload is invalid or has changed")
+    expected = "export const VERSION = " + json.dumps(version) + ";\n"
+    if files["lib/version.js"][0] != expected.encode():
+        raise ValueError("Library JavaScript version does not match the package")
+
+
+def package(archive: Path, output: Path, library: Path | None = None) -> Path:
     """Bundle the native executable, launcher, and assets without dependencies."""
     match = re.fullmatch(
         r"bionic-reader-v([0-9]+\.[0-9]+\.[0-9]+)-(.+)\.tar\.gz", archive.name
@@ -30,17 +67,14 @@ def package(archive: Path, output: Path) -> Path:
         raise ValueError("Expected a supported versioned native archive")
     version, target = match.groups()
     system, cpu, libc = TARGETS[target]
-    manifest = {
-        "name": "@arturoaviles/bionic-reader",
-        "version": version,
-        "description": "Local word-prefix emphasis for text streams and terminal sessions",
-        "license": "MIT",
-        "bin": {"bionic-reader": "bin/bionic-reader.js"},
-        "engines": {"node": ">=18"},
-        "os": [system],
-        "cpu": [cpu],
-        "preferUnplugged": True,
-    }
+    root = Path(__file__).resolve().parents[1]
+    manifest = json.loads(
+        (root / "packaging/npm/package.json.in")
+        .read_text()
+        .replace("@VERSION@", version)
+    )
+    manifest.pop("optionalDependencies", None)
+    manifest.update({"os": [system], "cpu": [cpu], "preferUnplugged": True})
     if libc is not None:
         # Static musl executables also run on glibc hosts. Registry-native
         # dependencies retain their stricter libc selector in package-registries.py.
@@ -52,6 +86,15 @@ def package(archive: Path, output: Path) -> Path:
         "package.json": (json.dumps(manifest, indent=2).encode() + b"\n", 0o644),
         "bin/bionic-reader.js": (launcher.read_bytes(), 0o755),
     }
+    library = library or root / "dist/library/lib"
+    if not (library / "wasm/engine_bg.wasm").is_file():
+        raise ValueError("Build the WebAssembly library payload before Node packaging")
+    for path in sorted(library.rglob("*")):
+        if path.is_file():
+            name = "lib/" + path.relative_to(library).as_posix()
+            if name in LIBRARY_FILES:
+                files[name] = (path.read_bytes(), 0o644)
+    validate_library(files, version)
     top = f"bionic-reader-{version}-{target}/"
     with tarfile.open(archive, "r:gz") as source:
         for member in source.getmembers():
@@ -95,5 +138,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--library",
+        type=Path,
+        help="compiled library directory from the same candidate",
+    )
     args = parser.parse_args()
-    print(package(args.archive, args.output))
+    print(package(args.archive, args.output, args.library))

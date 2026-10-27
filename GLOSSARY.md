@@ -16,6 +16,14 @@ _Avoid_: Boldness
 How often words in a passage are selected to receive emphasis.
 _Avoid_: Emphasis length
 
+**Document transformation**:
+Presentation of existing text or Markdown in a chosen output format according to bionic reading settings, while preserving literal content.
+_Avoid_: Text rewriting, reading session
+
+**Text segment**:
+A contiguous portion of a passage with a single bionic reading emphasis state: emphasized or unemphasized.
+_Avoid_: Byte offset, word
+
 **Reading session**:
 An opt-in interactive shell session in which command output is presented in bionic reading style.
 _Avoid_: Global text rewriting

@@ -19,8 +19,55 @@ env:
   PROPTEST_CASES: '4096'
 
 jobs:
+  portable-core:
+    name: Portable document engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install minimum Rust and WebAssembly target
+        run: rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13.17'
+      - name: Build portable engine on minimum Rust
+        run: cargo +1.85.1 check --locked --lib --no-default-features --target wasm32-unknown-unknown
+      - name: Build the shared WebAssembly payload once
+        run: |
+          rustup default 1.85.1
+          scripts/install-wasm-bindgen.sh "$RUNNER_TEMP/wasm-tools"
+          export WASM_BINDGEN="$RUNNER_TEMP/wasm-tools/wasm-bindgen"
+          scripts/build-library-wasm.sh
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bionic-reader"))')
+          python3 scripts/package-library-candidate.py --version "$version" --output dist/library-api.tgz
+      - name: Measure the installed API candidate
+        # zizmor: ignore[adhoc-packages] Installs only our local candidate offline with lifecycle scripts disabled.
+        run: |
+          npm install --prefix "$RUNNER_TEMP/measure" --offline --ignore-scripts --no-audit --no-fund --omit=optional "$GITHUB_WORKSPACE/dist/library-api.tgz"
+          cp scripts/report-library-performance.mjs "$RUNNER_TEMP/measure/"
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bionic-reader"))')
+          node "$RUNNER_TEMP/measure/report-library-performance.mjs" "$GITHUB_WORKSPACE/dist/library/lib/wasm/engine_bg.wasm" "$version" > dist/library/library-performance.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bionic-reader-library-payload
+          path: dist/library/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bionic-reader-library-api
+          path: dist/library-api.tgz
+          if-no-files-found: error
+          retention-days: 14
+
   rust:
     name: Rust checks
+    needs: portable-core
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -55,6 +102,10 @@ jobs:
         run: |
           make help
           make fmt-check check lint doc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-payload
+          path: dist/library
       - name: Unit, CLI, and PTY tests
         run: |
           make test test-doc
@@ -333,6 +384,7 @@ jobs:
 
   node-local-macos:
     name: Local npm, Yarn, and pnpm installs (macOS)
+    needs: portable-core
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -357,6 +409,10 @@ jobs:
           key: msrv-node-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: false
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-payload
+          path: dist/library
       - name: Build local archive and test local Node tarball installations
         run: |
           scripts/build-local-archive.sh
@@ -421,6 +477,7 @@ jobs:
 
   target-builds:
     name: Candidate build (${{ matrix.target }})
+    needs: portable-core
     strategy:
       fail-fast: false
       matrix:
@@ -456,14 +513,16 @@ jobs:
           rustup default 1.85.1
       - name: Install pinned Python packaging tools
         run: python3 -m pip install --disable-pip-version-check maturin==1.15.0 uv==0.13.5
-      - name: Install GNU target build tools
-        if: matrix.zig
+      - name: Install the portable Linux wheel linker
+        if: matrix.zig || matrix.musl
         run: |
           python3 -m pip install --disable-pip-version-check ziglang==0.15.1
           zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
           test -x "$zig_dir/zig"
           echo "$zig_dir" >> "$GITHUB_PATH"
-          rustup toolchain install stable --profile minimal
+      - name: Install the GNU binary build toolchain
+        if: matrix.zig
+        run: rustup toolchain install stable --profile minimal
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         if: matrix.zig
         with:
@@ -481,6 +540,10 @@ jobs:
           key: msrv-${{ matrix.target }}-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: false
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-payload
+          path: dist/library
       - name: Build local candidate
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
@@ -519,6 +582,7 @@ jobs:
           mkdir -p dist/bundle
           cp dist/candidates/v*/bionic-reader-v*-"$CANDIDATE_TARGET".tar.gz dist/bundle/
           cp "$RUNNER_TEMP"/python-wheels/*.whl dist/bundle/
+          cp dist/library/library-performance.json dist/bundle/
           if [[ -d "$RUNNER_TEMP/system-packages" ]]; then
             cp "$RUNNER_TEMP"/system-packages/* dist/bundle/
           fi
@@ -543,8 +607,17 @@ jobs:
         run: |
           # Standalone musl packages declare their static binary's glibc compatibility.
           npm install --prefix "$RUNNER_TEMP/release-node" --offline --ignore-scripts \
-            --no-audit --no-fund dist/bundle/*.npm.tgz
+            --no-audit --no-fund "$GITHUB_WORKSPACE"/dist/bundle/*.npm.tgz
           python3 scripts/check-installed-cli.py "$RUNNER_TEMP/release-node/node_modules/.bin/bionic-reader"
+      - name: Import the musllinux wheel on its actual libc runtime
+        if: matrix.musl
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/dist/bundle:/wheel:ro" \
+            -v "$GITHUB_WORKSPACE/scripts:/checks:ro" \
+            -v "$GITHUB_WORKSPACE/tests/fixtures:/fixtures:ro" \
+            python:3.13-alpine@sha256:8bcfa47b04b853a17aaf909362b847b2112fd6ec4105ea553ef9a43bafbb5916 \
+            sh -eu -c 'pip install --no-index --no-deps /wheel/*.whl; python /checks/check-python-library.py /fixtures/library.json; bionic-reader --version'
       - name: Build and install the build guide's host-local Python wheel
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
@@ -756,6 +829,179 @@ jobs:
         run: |
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges             --read-only --tmpfs /tmp:rw,exec,nosuid,nodev             --volume "$PWD/dist/bundle:/bundle:ro"             --volume "$PWD/scripts/check-glibc-runtime.sh:/check.sh:ro"             debian:buster-slim@sha256:bb3dc79fddbca7e8903248ab916bb775c96ec61014b3d02b4f06043b604726dc             bash /check.sh /bundle
 
+  library-node:
+    name: Library Node ${{ matrix.node }} (${{ matrix.runner }})
+    needs: portable-core
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15, windows-2025]
+        node: ['22', '24', '26']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-api
+          path: dist
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check:node -- dist/library-api.tgz
+
+  library-react:
+    name: React ${{ matrix.react }} public APIs
+    needs: portable-core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - react: '18.3.1'
+            types: '18.3.31'
+          - react: '19.3.1'
+            types: '19.3.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-api
+          path: dist
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test installed React APIs and declarations
+        env:
+          BIONIC_REACT_VERSION: ${{ matrix.react }}
+          BIONIC_REACT_TYPES: ${{ matrix.types }}
+        run: npm run check:node -- dist/library-api.tgz
+
+  library-examples:
+    name: ${{ matrix.example }} (${{ matrix.browser }}, ${{ matrix.channel }}, React ${{ matrix.react }})
+    needs: portable-core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: browser
+            browser: chromium
+            channel: chrome
+          - example: browser
+            browser: chromium
+            channel: msedge
+          - example: browser
+            browser: firefox
+          - example: react
+            browser: chromium
+            channel: chrome
+            react: '18.3.1'
+          - example: react
+            browser: chromium
+            channel: chrome
+            react: '19.3.1'
+          - example: next
+            browser: chromium
+            channel: chrome
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-api
+          path: dist
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install the actual selected browser
+        env:
+          TEST_BROWSER: ${{ matrix.browser }}
+          TEST_CHANNEL: ${{ matrix.channel }}
+        run: node_modules/.bin/playwright install --with-deps "${TEST_CHANNEL:-$TEST_BROWSER}"
+      - name: Build, serve, and verify the installed example
+        env:
+          BIONIC_BROWSER: ${{ matrix.browser }}
+          BIONIC_BROWSER_CHANNEL: ${{ matrix.channel }}
+          BIONIC_REACT_VERSION: ${{ matrix.react }}
+          BIONIC_EXAMPLE_EVIDENCE: ${{ github.workspace }}/example-evidence.json
+          TEST_EXAMPLE: ${{ matrix.example }}
+        run: npm run check:example -- "$TEST_EXAMPLE" dist/library-api.tgz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: library-${{ matrix.example }}-${{ matrix.browser }}-${{ matrix.channel }}-${{ matrix.react }}
+          path: example-evidence.json
+          if-no-files-found: error
+
+  library-safari:
+    name: Actual Safari browser conformance
+    needs: portable-core
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.11.1'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13.17'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-library-api
+          path: dist
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Enable automation only on the disposable CI runner
+        run: sudo /usr/bin/safaridriver --enable
+      - name: Verify the installed package in actual Safari
+        env:
+          BIONIC_BROWSER: safari
+          BIONIC_EXAMPLE_EVIDENCE: ${{ github.workspace }}/safari-evidence.json
+        run: npm run check:example -- browser dist/library-api.tgz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: library-actual-safari
+          path: safari-evidence.json
+          if-no-files-found: error
+
+  library-python:
+    name: Installed library CPython ${{ matrix.python }}
+    needs: target-builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14', '3.15']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-x86_64-unknown-linux-gnu
+          path: dist/python-candidate
+      - name: Check and import the exact candidate wheel
+        run: |
+          python scripts/candidate-checksums.py dist/python-candidate --verify
+          python -m pip install --no-index --no-deps dist/python-candidate/*.whl
+          python scripts/check-python-library.py tests/fixtures/library.json
+
   attest-candidates:
     name: Attest main candidates (${{ matrix.target }})
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -803,7 +1049,7 @@ jobs:
   ci-gate:
     name: CI gate
     if: always()
-    needs: [rust, coverage, rust-maintenance, miri, fuzz, homebrew-local, snap-local, node-local-macos, framework-loader-tests, distribution-static, target-builds, linux-package-install-smoke, macos-shell-tests, workflow-lint, source-install, glibc-runtime]
+    needs: [library-node, library-react, library-examples, library-safari, library-python, portable-core, rust, coverage, rust-maintenance, miri, fuzz, homebrew-local, snap-local, node-local-macos, framework-loader-tests, distribution-static, target-builds, linux-package-install-smoke, macos-shell-tests, workflow-lint, source-install, glibc-runtime]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -813,4 +1059,4 @@ jobs:
       - name: Require every PR matrix job to succeed
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/check-ci-gate.py rust coverage rust-maintenance miri fuzz homebrew-local snap-local node-local-macos framework-loader-tests distribution-static target-builds linux-package-install-smoke macos-shell-tests workflow-lint source-install glibc-runtime
+        run: python3 scripts/check-ci-gate.py library-node library-react library-examples library-safari library-python portable-core rust coverage rust-maintenance miri fuzz homebrew-local snap-local node-local-macos framework-loader-tests distribution-static target-builds linux-package-install-smoke macos-shell-tests workflow-lint source-install glibc-runtime

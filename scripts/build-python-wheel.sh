@@ -51,6 +51,16 @@ cleanup() {
 trap cleanup EXIT
 wheel_stage=$(mktemp -d "$output_dir/.wheel-stage.XXXXXX")
 mkdir -p "$stage_data/data/share/bionic-reader"
+mkdir -p "$stage_data/scripts"
+if [[ $local_build == true ]]; then
+  cargo build --release --locked --target "$target" --bin bionic-reader
+fi
+native_binary="${CARGO_TARGET_DIR:-$repo_root/target}/$target/release/bionic-reader"
+[[ -x $native_binary ]] || {
+  printf 'Build the native release archive for %s before its wheel\n' "$target" >&2
+  exit 66
+}
+cp "$native_binary" "$stage_data/scripts/bionic-reader"
 cp "$repo_root/packaging/config.example.toml" "$stage_data/data/share/bionic-reader/config.example.toml"
 cp -R "$repo_root/integrations" "$stage_data/data/share/bionic-reader/integrations"
 [[ -d $repo_root/completions ]] || {
@@ -68,7 +78,18 @@ command -v maturin >/dev/null 2>&1 || {
   exit 69
 }
 
-build_args=(build --release --locked --target "$target" --out "$wheel_stage")
+require_zig() {
+  command -v zig >/dev/null 2>&1 || {
+    printf 'Portable Linux wheels require Zig 0.15.1 for target-compatible runtime libraries\n' >&2
+    exit 69
+  }
+  [[ $(zig version) == '0.15.1' ]] || {
+    printf 'Portable Linux wheels are pinned to Zig 0.15.1; found %s\n' "$(zig version)" >&2
+    exit 69
+  }
+}
+
+build_args=(build --profile python-wheel --locked --target "$target" --out "$wheel_stage")
 case "$target" in
   x86_64-apple-darwin|aarch64-apple-darwin)
     export MACOSX_DEPLOYMENT_TARGET=11.0
@@ -77,19 +98,13 @@ case "$target" in
     if [[ $local_build == true ]]; then
       build_args+=(--compatibility linux)
     else
-      command -v zig >/dev/null 2>&1 || {
-        printf 'GNU Linux wheels require Zig to target the manylinux_2_28 baseline\n' >&2
-        exit 69
-      }
-      [[ $(zig version) == '0.15.1' ]] || {
-        printf 'GNU Linux wheels are pinned to Zig 0.15.1; found %s\n' "$(zig version)" >&2
-        exit 69
-      }
+      require_zig
       build_args+=(--compatibility manylinux_2_28 --zig)
     fi
     ;;
   x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
-    build_args+=(--compatibility musllinux_1_2)
+    require_zig
+    build_args+=(--compatibility musllinux_1_2 --zig)
     ;;
   *)
     printf 'Unsupported Python wheel target: %s\n' "$target" >&2

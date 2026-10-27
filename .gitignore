@@ -1,4 +1,6 @@
 /target/
+node_modules/
+.next/
 /dist/
 /.venv/
 /venv/

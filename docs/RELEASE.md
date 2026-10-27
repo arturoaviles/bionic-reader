@@ -2,7 +2,8 @@
 
 The release pipeline promotes tested bytes from main CI. Package managers then
 install those bytes through their normal commands; no Python dispatcher is
-required by users. No public release or registry publication exists yet.
+required by users. Public releases and packages are available through GitHub,
+PyPI, npm, and crates.io.
 
 ## Version policy
 
@@ -64,7 +65,8 @@ reading speed.
 
 The release contains six native archives, six wheels, six standalone Node
 packages, six Linux system packages plus architecture-named aliases, seven npm
-registry tarballs, a generated Homebrew formula, six SBOMs, RELEASE-SOURCE.json
+registry tarballs, a generated Homebrew formula, six bundle SBOMs, a shared
+versioned library-performance JSON report, RELEASE-SOURCE.json
 and SHA256SUMS. Stable Linux asset names support native commands such as
 `dpkg --print-architecture`; SemVer remains in package metadata and release tags.
 The seven npm registry files are derived from the verified standalone files:
@@ -85,10 +87,9 @@ before retrying; published versions require a new tag/version.
 
 ## Publishing package managers
 
-The publishing workflow is ready locally, but external ownership and credentials
-must be configured by the maintainer. The public PyPI `bionic-reader` and npm
-`@arturoaviles/bionic-reader` endpoints returned 404 during this review; that does
-not reserve either name or prove account ownership. The public
+Publication requires configured ownership and credentials for each registry.
+The public PyPI `bionic-reader`, npm `@arturoaviles/bionic-reader`, and crates.io
+`bionic-reader` package names are already registered. The public
 `arturoaviles/homebrew-tap` repository contains the published `bionic-reader`
 formula. Users add and trust it with `brew tap arturoaviles/tap` and
 `brew trust arturoaviles/tap`, then run `brew install bionic-reader`.
@@ -122,6 +123,12 @@ integrity equals the current tarball; a mismatch fails. Versions are never
 silently replaced. PyPI keeps existing-file rejection enabled; after a partial
 upload, verify uploaded digests and publish only the missing wheels using the
 approved publishing identity, rather than weakening its immutability checks.
+
+Crates.io publication is currently manual. From the exact tested release commit,
+use the existing authorized Cargo credential to run `cargo publish --locked
+--package bionic-reader`. Confirm the uploaded crate checksum against the
+validated Cargo candidate and test a fresh registry consumer. The registry
+package has the same Cargo-owned version as the Python and npm artifacts.
 
 To retry an individual enabled channel without republishing the others:
 
