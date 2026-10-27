@@ -3,8 +3,8 @@
 This Pages Router example pins Next.js 16.4.3 and React 19.3.1 and uses Webpack.
 Install the npm package, build, then start:
 
-This example requires the forthcoming library release; the currently published
-npm package provides the CLI.
+This example uses the application APIs documented in the
+[library guide](../../docs/LIBRARY.md).
 
 ```sh
 npm install @arturoaviles/bionic-reader

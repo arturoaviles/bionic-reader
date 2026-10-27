@@ -7,10 +7,8 @@ applications do not launch the CLI or call a service.
 
 Packages are published on [PyPI](https://pypi.org/project/bionic-reader/),
 [npm](https://www.npmjs.com/package/@arturoaviles/bionic-reader), and
-[crates.io](https://crates.io/crates/bionic-reader). The current Python/npm
-releases provide the CLI, and the Rust crate exposes its existing lower-level
-APIs. The new application APIs documented below require the forthcoming library
-release. See [installation](INSTALL.md) for package-manager details.
+[crates.io](https://crates.io/crates/bionic-reader). Earlier CLI-only
+releases do not include the new application APIs documented below. See [installation](INSTALL.md) for package-manager details.
 
 ## Rust
 

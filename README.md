@@ -78,9 +78,8 @@ Install packages from [PyPI](https://pypi.org/project/bionic-reader/),
 the CLI's local transformation engine. See the [library guide](docs/LIBRARY.md)
 for complete options, errors, and platform requirements.
 
-The published Python and npm packages currently provide the CLI; the published
-Rust crate exposes the existing lower-level APIs. The new callable APIs shown
-below require the forthcoming library release.
+Earlier CLI-only releases do not include the callable APIs shown below. The
+registry installation commands select the latest available release.
 
 ### Python
 

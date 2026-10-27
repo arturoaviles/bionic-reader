@@ -2,8 +2,8 @@
 
 Install the npm package into this directory, then start Vite:
 
-This example requires the forthcoming library release; the currently published
-npm package provides the CLI.
+This example uses the application APIs documented in the
+[library guide](../../docs/LIBRARY.md).
 
 ```sh
 npm install @arturoaviles/bionic-reader
