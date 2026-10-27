@@ -76,10 +76,74 @@ You can also download native binaries from [GitHub Releases](https://github.com/
 
 ## Application libraries
 
-Use the same local transformation engine from Rust, Python, or JavaScript.
-The npm package also exposes a React component for rendering literal text with
-bionic emphasis. See the [library guide](docs/LIBRARY.md) for APIs, initialization,
-installed-package examples, and the release validation matrix.
+Use the same local transformation engine from Python, JavaScript, or Rust.
+These APIs are available in this checkout; registry availability depends on a
+separately verified release. See the [library guide](docs/LIBRARY.md) for local
+package builds, complete options, errors, and the validated platform matrix.
+
+### Python
+
+Requires Python 3.11+. After [building the wheel](docs/BUILD.md#pip), install it
+into your application's virtual environment:
+
+```sh
+python -m pip install dist/local/python/bionic_reader-*.whl
+```
+
+```python
+from bionic_reader import Reader
+
+reader = Reader()
+print(reader.render("Hello world", format="html", profile="balanced"))
+print(reader.segments("Hello world"))
+```
+
+### JavaScript
+
+Requires Node 22+. Install the [built npm package](docs/BUILD.md#npm) into your
+application, then initialize the bundled WebAssembly engine once:
+
+```js
+import { createReader } from '@arturoaviles/bionic-reader';
+
+const reader = await createReader();
+console.log(reader.render('Hello world', { format: 'html', profile: 'balanced' }));
+console.log(reader.segments('Hello world'));
+```
+
+CommonJS uses `const { createReader } = require('@arturoaviles/bionic-reader')`
+and awaits initialization in an async function. Browser bundlers select the
+browser loader. React applications can use `BionicReaderProvider` and
+`BionicText` from `@arturoaviles/bionic-reader/react`; see the
+[React example](docs/LIBRARY.md#react) for initialization and hydration.
+
+### Rust
+
+Requires Rust 1.85.1+. Until a crate is published, add the local checkout to your
+application's `Cargo.toml`, adjusting the path:
+
+```toml
+[dependencies]
+bionic-reader = { path = "../bionic-reader", default-features = false }
+```
+
+```rust
+use bionic_reader::reading::{Options, Reader};
+use bionic_reader::settings::OutputFormat;
+
+fn main() -> Result<(), bionic_reader::Error> {
+    let reader = Reader::new();
+    let options = Options::default();
+    println!("{}", reader.render("Hello world", OutputFormat::Html, &options)?);
+    println!("{:?}", reader.segments("Hello world", &options)?);
+    Ok(())
+}
+```
+
+Formatted output requires an explicit `ansi`, `plain`, `markdown`, or `html`
+format. Text segments contain literal `text` and an `emphasized` flag for custom
+presentation. Calls use explicit settings and deterministic defaults; they do
+not implicitly read CLI configuration or terminal state.
 
 ## The reader
 

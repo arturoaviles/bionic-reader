@@ -48,7 +48,7 @@ jobs:
       - name: Measure the installed API candidate
         # zizmor: ignore[adhoc-packages] Installs only our local candidate offline with lifecycle scripts disabled.
         run: |
-          npm install --prefix "$RUNNER_TEMP/measure" --offline --ignore-scripts --no-audit --no-fund --omit=optional dist/library-api.tgz
+          npm install --prefix "$RUNNER_TEMP/measure" --offline --ignore-scripts --no-audit --no-fund --omit=optional "$GITHUB_WORKSPACE/dist/library-api.tgz"
           cp scripts/report-library-performance.mjs "$RUNNER_TEMP/measure/"
           version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bionic-reader"))')
           node "$RUNNER_TEMP/measure/report-library-performance.mjs" "$GITHUB_WORKSPACE/dist/library/lib/wasm/engine_bg.wasm" "$version" > dist/library/library-performance.json
@@ -605,7 +605,7 @@ jobs:
         run: |
           # Standalone musl packages declare their static binary's glibc compatibility.
           npm install --prefix "$RUNNER_TEMP/release-node" --offline --ignore-scripts \
-            --no-audit --no-fund dist/bundle/*.npm.tgz
+            --no-audit --no-fund "$GITHUB_WORKSPACE"/dist/bundle/*.npm.tgz
           python3 scripts/check-installed-cli.py "$RUNNER_TEMP/release-node/node_modules/.bin/bionic-reader"
       - name: Import the musllinux wheel on its actual libc runtime
         if: matrix.musl
@@ -944,7 +944,7 @@ jobs:
   library-safari:
     name: Actual Safari browser conformance
     needs: portable-core
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
