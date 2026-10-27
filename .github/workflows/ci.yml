@@ -513,14 +513,16 @@ jobs:
           rustup default 1.85.1
       - name: Install pinned Python packaging tools
         run: python3 -m pip install --disable-pip-version-check maturin==1.15.0 uv==0.13.5
-      - name: Install GNU target build tools
-        if: matrix.zig
+      - name: Install the portable Linux wheel linker
+        if: matrix.zig || matrix.musl
         run: |
           python3 -m pip install --disable-pip-version-check ziglang==0.15.1
           zig_dir=$(python3 -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent)')
           test -x "$zig_dir/zig"
           echo "$zig_dir" >> "$GITHUB_PATH"
-          rustup toolchain install stable --profile minimal
+      - name: Install the GNU binary build toolchain
+        if: matrix.zig
+        run: rustup toolchain install stable --profile minimal
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         if: matrix.zig
         with:

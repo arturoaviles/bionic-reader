@@ -78,6 +78,17 @@ command -v maturin >/dev/null 2>&1 || {
   exit 69
 }
 
+require_zig() {
+  command -v zig >/dev/null 2>&1 || {
+    printf 'Portable Linux wheels require Zig 0.15.1 for target-compatible runtime libraries\n' >&2
+    exit 69
+  }
+  [[ $(zig version) == '0.15.1' ]] || {
+    printf 'Portable Linux wheels are pinned to Zig 0.15.1; found %s\n' "$(zig version)" >&2
+    exit 69
+  }
+}
+
 build_args=(build --profile python-wheel --locked --target "$target" --out "$wheel_stage")
 case "$target" in
   x86_64-apple-darwin|aarch64-apple-darwin)
@@ -87,19 +98,13 @@ case "$target" in
     if [[ $local_build == true ]]; then
       build_args+=(--compatibility linux)
     else
-      command -v zig >/dev/null 2>&1 || {
-        printf 'GNU Linux wheels require Zig to target the manylinux_2_28 baseline\n' >&2
-        exit 69
-      }
-      [[ $(zig version) == '0.15.1' ]] || {
-        printf 'GNU Linux wheels are pinned to Zig 0.15.1; found %s\n' "$(zig version)" >&2
-        exit 69
-      }
+      require_zig
       build_args+=(--compatibility manylinux_2_28 --zig)
     fi
     ;;
   x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
-    build_args+=(--compatibility musllinux_1_2)
+    require_zig
+    build_args+=(--compatibility musllinux_1_2 --zig)
     ;;
   *)
     printf 'Unsupported Python wheel target: %s\n' "$target" >&2

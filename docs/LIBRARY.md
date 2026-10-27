@@ -171,6 +171,8 @@ restrictions and control handling.
 
 The Vite examples require Node 22.12 or newer. Build tools are pinned separately from runtime minimums. Use maturin 1.15.0 for
 Python, wasm-bindgen 0.2.129 for JavaScript, and the checked-in Cargo lockfile.
+Portable Linux wheels use Zig 0.15.1 so their runtime libraries match GNU or
+musl targets; host-local GNU wheels can use the native toolchain.
 Install the `wasm32-unknown-unknown` Rust target, put the pinned wasm-bindgen CLI
 on PATH (or set `WASM_BINDGEN`), then run:
 
