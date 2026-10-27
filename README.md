@@ -10,8 +10,8 @@ On macOS or GNU/Linux with Homebrew installed, use this repository as the tap:
 
 ```sh
 brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
-brew install --HEAD arturoaviles/bionic-reader/bionic-reader
-brew test arturoaviles/bionic-reader/bionic-reader
+brew install --HEAD bionic-reader
+brew test bionic-reader
 bionic-reader --version
 ```
 
@@ -23,9 +23,9 @@ To update or remove the installation:
 
 ```sh
 brew update
-brew upgrade --fetch-HEAD arturoaviles/bionic-reader/bionic-reader
+brew upgrade --fetch-HEAD bionic-reader
 # To uninstall:
-brew uninstall arturoaviles/bionic-reader/bionic-reader
+brew uninstall bionic-reader
 brew untap arturoaviles/bionic-reader
 ```
 
