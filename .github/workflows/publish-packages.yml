@@ -166,6 +166,10 @@ jobs:
               formula = base64.b64decode(current["content"]).decode()
               match = re.search(r'^  version "([0-9]+\.[0-9]+\.[0-9]+)"$', formula, re.MULTILINE)
               if match is None:
+                  match = re.search(
+                      r'/releases/download/v([0-9]+\.[0-9]+\.[0-9]+)/bionic-reader-v', formula
+                  )
+              if match is None:
                   raise ValueError("Cannot determine the current tap version")
               current_version = tuple(map(int, match[1].split(".")))
               requested_version = tuple(map(int, os.environ["RELEASE_TAG"][1:].split(".")))
