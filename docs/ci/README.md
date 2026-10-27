@@ -73,7 +73,7 @@ MSRV source/Git/package installation intentionally has no restored cache.
 
 ## Candidate integrity
 
-Each native target's workflow artifact contains a flat bundle: archive, wheel,
+Each native target's workflow artifact contains a flat bundle: archive, wheel, standalone Node tarball,
 `sbom.cdx.json` and relative-path `SHA256SUMS`. Binary-mode CycloneDX 1.5 SBOMs use
 the matching target and default feature configuration, excluding dev dependencies.
 Checksums are generated after staging every file, then verified before extraction
@@ -154,3 +154,26 @@ size and machine/compiler details. Timing has no regression threshold. Nightly
 fuzzing uses ASan and does not replace thread-sanitizer testing. Diagnostics retain
 14 days. Coverage floors, scan-work bounds and memory gates remain mandatory;
 the requested 100% coverage target remains unmet.
+
+## GitHub Release promotion
+
+GNU target bundles also include direct-install `.deb`, `.rpm`, and Arch packages
+before checksums and main-push provenance are generated. The Debian/Fedora/Arch
+smokes install the exact x86-64 bundle packages rather than rebuilding them. The separate
+`release.yml` workflow verifies a version tag and a successful main-push CI run at
+that exact commit, then verifies and promotes all six attested target bundles to
+a draft GitHub Release. It requires successful security workflow runs at the same
+commit. The write-capable draft job only downloads the verified staging artifact,
+checks its manifest, and uploads assets; it never checks out or runs candidate
+code. See [RELEASE.md](../RELEASE.md) for retry, validation, and publication steps.
+
+The target matrix also packages one self-contained npm/Yarn/pnpm tarball per
+native archive and checks its exact npm installation. Native GNU Linux and
+macOS jobs additionally exercise Yarn Plug'n'Play and pnpm in standalone mode.
+Release preparation generates a Homebrew formula from the promoted archive
+digests, derives seven native npm registry packages and adds architecture-named
+Linux package aliases before aggregate hashing. The separate
+`publish-packages.yml` workflow revalidates the public release and prepares
+independent Homebrew, PyPI, npm and GitHub Packages publishing jobs. Each channel
+is opt-in and receives only its own credentials. The user installation path
+uses native package-manager commands.

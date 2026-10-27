@@ -128,13 +128,13 @@ scripts/check-cargo-package.sh
 
 This runs Cargo's verified `package --locked`, checks the archive contents, extracts the `.crate` to a temporary directory, installs it with Cargo, exercises the installed binary and a reading session, and uninstalls it. The archive remains under Cargo's `target/package/` directory (or the target directory selected by `CARGO_TARGET_DIR`). CI covers the same five OS/architecture/toolchain combinations as source installation and runs the full test suite against the packaged source on Linux x86-64. That job also uploads the `.crate` as a workflow artifact.
 
-Before publishing a release, check crates.io name ownership and credentials, then run the final preflight:
+Before publishing to crates.io, check crates.io name ownership and credentials, then run the final preflight:
 
 ```sh
 cargo publish --dry-run --locked
 ```
 
-The dry run does not upload the crate. No workflow publishes it automatically. Use the README's source/Git installation commands before registry publication. See the official [Cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html), [install](https://doc.rust-lang.org/cargo/commands/cargo-install.html), and [publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html) documentation.
+The dry run does not upload the crate. No workflow publishes it automatically. Use the [build guide](docs/BUILD.md) for source/Git installation before registry publication. See the official [Cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html), [install](https://doc.rust-lang.org/cargo/commands/cargo-install.html), and [publish](https://doc.rust-lang.org/cargo/commands/cargo-publish.html) documentation.
 
 ## Candidate binaries
 
@@ -151,7 +151,7 @@ scripts/build-release.sh aarch64-unknown-linux-musl
 
 With no arguments it attempts all targets and stops if the current host lacks the required build support. Build macOS artifacts on matching Intel and Apple Silicon macOS runners. GNU Linux candidates use cargo-zigbuild 0.23.4 with Zig 0.15.1 and are checked for GLIBC symbol versions above 2.28. Musl candidates need a matching Linux host with `musl-gcc`. `SOURCE_DATE_EPOCH` can be set to reproduce archive timestamps; the default comes from the current Git commit. Candidate archives and checksums are written under `dist/candidates/v<VERSION>/`.
 
-`scripts/package-linux.sh TARGET` converts a built GNU candidate into deb, rpm, and Arch Linux packages with nFPM 2.47.0. It includes the README, license, config example, shell integration/framework adapters, and shell completions; it does not run installation scripts or edit user shell configuration. `scripts/package-manager-install-smoke.sh` builds a local GNU candidate, creates a temporary signing key inside each disposable container, generates signed APT/DNF/pacman repositories, and installs and exercises the package in Debian, Fedora, and Arch containers. It needs Docker, cargo-zigbuild 0.23.4, Zig 0.15.1, and nFPM 2.47.0. CI runs this against the current official container images.
+`scripts/package-linux.sh TARGET` converts a built GNU candidate into deb, rpm, and Arch Linux packages with nFPM 2.47.0. It includes the README, license, config example, shell integration/framework adapters, and shell completions; it does not run installation scripts or edit user shell configuration. `scripts/package-manager-install-smoke.sh` builds a local GNU candidate, creates a temporary signing key inside each disposable container, generates signed APT/DNF/pacman repositories, and installs and exercises the package in Debian, Fedora, and Arch containers. It needs Docker, cargo-zigbuild 0.23.4, Zig 0.15.1, and nFPM 2.47.0. CI passes `PACKAGE_INPUT_DIR` pointing to the checksum-verified GNU x86-64 target bundle, so the containers install the exact direct-download package files. Without that variable, the script builds local candidates first. CI runs this against the current official container images.
 
 ## Project repository candidates
 
@@ -188,18 +188,18 @@ The wheel build pins [maturin 1.15.0](https://www.maturin.rs/), [cargo-zigbuild]
 
 ## Repository-only installation coverage
 
-The README documents a current-checkout route for every requested package manager. No Bionic Reader registry package or GitHub release is consumed by these tests.
+The [build guide](docs/BUILD.md) documents a current-checkout route for every requested package manager. No Bionic Reader registry package or GitHub release is consumed by these tests.
 
 - Cargo checks both `--path` installation and Git-source installation from the checkout's exact commit (`scripts/check-cargo-git-install.sh`), plus extracted `.crate` installation.
 - `scripts/build-local-archive.sh` builds the exact host target and respects `CARGO_TARGET_DIR`. Its archives are for installation on the build host, while `build-release.sh` retains portable release constraints.
-- `scripts/check-homebrew-install.sh` consumes a host-local archive through a temporary local tap, checks formula installation, `brew test`, installed assets and CLI/PTY behavior, uninstall, and tap cleanup. With `--source`, it instead installs `Formula/bionic-reader.rb` using `--HEAD` from public `main`, as documented in the README; it refuses to replace an existing `bionic-reader` Homebrew installation. The explicit tap URL lets this repository serve as the tap without a separate `homebrew-tap` repository. CI covers both routes on GNU/Linux and macOS on x86-64 and ARM64.
-- Linux container checks install from signed local repositories, remove the package, install the same built `.deb`/`.rpm`/Arch archive directly as shown in the README, check installed assets and CLI/PTY behavior, and remove it again.
+- `scripts/check-homebrew-install.sh` consumes a host-local archive through a temporary local tap, checks formula installation, `brew test`, installed assets and CLI/PTY behavior, uninstall, and tap cleanup. With `--source`, it instead installs `Formula/bionic-reader.rb` using `--HEAD` from public `main`, as documented in the installation guide; it refuses to replace an existing `bionic-reader` Homebrew installation. The explicit tap URL lets this repository serve as the tap without a separate `homebrew-tap` repository. CI covers both routes on GNU/Linux and macOS on x86-64 and ARM64.
+- Linux container checks install from signed local repositories, remove the package, install the same built `.deb`/`.rpm`/Arch archive directly as shown in the build guide, check installed assets and CLI/PTY behavior, and remove it again.
 - `scripts/build-python-wheel.sh --local TARGET` builds a wheel for the exact host without Zig on GNU/Linux. It validates the wheel assets and tests pip, uv pip, and uv tool install/use/uninstall. CI exercises this route on matching macOS and GNU/Linux hosts in addition to the portable candidate builds.
 - `scripts/package-npm.sh --local` emits a base tarball and one native tarball from a host archive. Its only native dependency is a local file URL. The installation checker consumes these public artifacts, installs offline with npm/Yarn Plug'n'Play/pnpm, checks ANSI output and stdin, then removes the packages. CI covers Linux and macOS.
 - The Snap job runs on Ubuntu 24.04 with Snapcraft 8.14.5 (amd64 revision 17614). It builds the tracked checkout, installs the unsigned file using `--dangerous --classic`, checks the actual `/snap/bin/bionic-reader` launcher with CLI/PTY tests, then removes the Snap. Snapcraft itself runs elevated for its destructive build in this disposable runner; run the repository script as the normal runner user.
 - The seven pinned framework-loader tests start fresh interactive shells, require automatic activation of exactly one reading session, and check emphasized command output. In fish, initialization uses `eval (bionic-reader init fish | string collect)` so a sourced pipeline does not replace the terminal input needed by the session.
 
-To run the local routes, follow the commands in [README.md](README.md). Homebrew and Snap checks make actual package-manager installations and remove their own test installations; their helpers refuse to replace existing test formula/Snap installations.
+To run the local routes, follow the commands in [docs/BUILD.md](docs/BUILD.md). Homebrew and Snap checks make actual package-manager installations and remove their own test installations; their helpers refuse to replace existing test formula/Snap installations.
 
 ## CI policy and scheduled reports
 
@@ -216,4 +216,30 @@ make mutation-report MODULE=segmentation      # two workers, 45 minutes
 
 Weekly mutation campaigns cover settings, segmentation and the transformer. Surviving mutants and mutant timeouts remain advisory; failing baselines, invalid output and tool errors fail. Scheduled diagnostics have 14-day retention. Existing coverage floors (92% lines, 91% regions, 88% functions, 80% branches), memory limits and scan-work assertions remain mandatory. The 100% coverage target remains open.
 
-Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Windows and registry/release publication remain separate work.
+Dependabot proposes weekly Cargo (application and fuzz), Actions and Python updates, grouping patch/minor changes while keeping majors separate. Merging remains manual. Windows and registry publication remain separate work. GitHub Release preparation is documented in [docs/RELEASE.md](docs/RELEASE.md).
+
+## Release and registry packages
+
+[README.md](README.md#installation) contains native package-manager entry points;
+[INSTALL.md](docs/INSTALL.md) covers platform requirements and alternatives, and
+[BUILD.md](docs/BUILD.md) contains compilation and local packaging steps.
+
+`scripts/package-release-node.py ARCHIVE --output DIRECTORY` creates a
+self-contained native Node tarball. Run
+`NODE_PACKAGE_MODE=standalone scripts/check-node-package-installs.sh BINARY`
+for npm/Yarn Plug'n'Play/pnpm installation, CLI/PTY and removal checks. The
+original split-package local candidate mode remains the default. Use
+`NODE_PACKAGE_MODE=registry` to test the generated registry format against a
+temporary loopback npm registry through all three managers; the fixture and
+manager caches are cleaned up on exit.
+
+Release preparation uses `scripts/package-registries.py` to derive seven npm
+registry tarballs from verified standalone payloads, preserving the exact native
+bytes and shared JS launcher. `scripts/stage-publication.py` revalidates a public
+release, its current tag, complete checksum manifest and original main CI
+provenance before staging isolated Homebrew/PyPI/npm publication artifacts.
+
+The separate publishing workflow runs after publication and has independent,
+opt-in jobs with scoped credentials. Setup and retry instructions are in
+[RELEASE.md](docs/RELEASE.md#publishing-package-managers). No Python dispatcher is
+part of the user installation flow.
