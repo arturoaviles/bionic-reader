@@ -4,29 +4,75 @@ Use your package manager directly. GitHub Releases carry binaries, Linux system
 packages, Python wheels and Node packages; Homebrew/PyPI/npm publication is
 performed after a release is published and its channel is enabled.
 
-**No public release or registry package is available yet.** Cargo Git-source
-installation works now. The native commands in the README become available as
-the first release and each registry channel are published. See
+Homebrew installs prebuilt binaries from the public tap. Cargo Git-source
+installation builds from source. Other native commands in the README require
+the corresponding release assets or registry publication. See
 [publication setup](RELEASE.md#publishing-package-managers) for maintainer requirements.
 
 ## Homebrew
 
+On macOS or GNU/Linux, add and trust the public
+[Homebrew tap](https://github.com/arturoaviles/homebrew-tap), then install:
+
 ```sh
-brew install arturoaviles/tap/bionic-reader
-brew upgrade arturoaviles/tap/bionic-reader
+brew tap arturoaviles/tap
+brew trust arturoaviles/tap
+brew install bionic-reader
 ```
 
-The public `arturoaviles/homebrew-tap` repository must first be created and
-configured for the publishing workflow. The formula chooses the CPU/OS and
-checks the matching native archive digest. Until the tap is published, you can
-install a release formula using a local tap without any Python dispatcher:
+Verify the installation:
+
+```sh
+brew test bionic-reader
+bionic-reader --version
+```
+
+The formula selects the matching CPU/OS archive and verifies its digest. Rust
+and `--HEAD` are unnecessary for this prebuilt installation. Add and trust the
+tap only once; package commands then use just `bionic-reader`.
+
+To update:
+
+```sh
+brew update
+brew upgrade bionic-reader
+```
+
+To remove the installation:
+
+```sh
+brew uninstall bionic-reader
+brew untap arturoaviles/tap
+```
+
+### Build from main
+
+To build the latest source instead of installing a prebuilt release, use this
+repository as a separate tap:
+
+```sh
+brew tap arturoaviles/bionic-reader https://github.com/arturoaviles/bionic-reader.git
+brew trust arturoaviles/bionic-reader
+brew install --HEAD bionic-reader
+```
+
+This installs Rust as a build dependency and compiles `main` using the checked-in
+`Cargo.lock`. On macOS, Xcode Command Line Tools are also required. Update this
+installation with `brew update` followed by `brew upgrade --fetch-HEAD bionic-reader`.
+To switch to the prebuilt channel, run `brew uninstall bionic-reader` and
+`brew untap arturoaviles/bionic-reader`, then follow the tap installation above.
+
+### Install a release formula locally
+
+You can also install a GitHub release's `bionic-reader.rb` formula and its native
+archives using a local tap:
 
 ```sh
 brew tap-new arturoaviles/bionic-reader-local
 curl --fail --location \
   https://github.com/arturoaviles/bionic-reader/releases/latest/download/bionic-reader.rb \
   --output "$(brew --repository arturoaviles/bionic-reader-local)/Formula/bionic-reader.rb"
-brew install arturoaviles/bionic-reader-local/bionic-reader
+brew install bionic-reader
 ```
 
 This downloads prebuilt binaries; `--build-from-source` is unnecessary. Local
@@ -152,7 +198,7 @@ see [SHELL.md](SHELL.md) for explicit shell setup.
 
 Use the route matching your installation:
 
-- Homebrew: `brew uninstall arturoaviles/tap/bionic-reader`, then `brew untap arturoaviles/tap`.
+- Homebrew: `brew uninstall bionic-reader`, then `brew untap arturoaviles/tap`. For a source installation, untap `arturoaviles/bionic-reader` instead.
 - Archive: remove the extracted archive directory and the PATH entry you added for its `bin` directory.
 - Debian / Ubuntu: `sudo apt remove bionic-reader`.
 - Fedora: `sudo dnf remove bionic-reader`.

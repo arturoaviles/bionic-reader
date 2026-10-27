@@ -88,12 +88,15 @@ before retrying; published versions require a new tag/version.
 The publishing workflow is ready locally, but external ownership and credentials
 must be configured by the maintainer. The public PyPI `bionic-reader` and npm
 `@arturoaviles/bionic-reader` endpoints returned 404 during this review; that does
-not reserve either name or prove account ownership. The Homebrew tap was absent.
+not reserve either name or prove account ownership. The public
+`arturoaviles/homebrew-tap` repository contains the published `bionic-reader`
+formula. Users add and trust it with `brew tap arturoaviles/tap` and
+`brew trust arturoaviles/tap`, then run `brew install bionic-reader`.
 Do not enable a channel before creating/owning its destination.
 
 | Channel | Repository variable | External setup |
 | --- | --- | --- |
-| Homebrew | `PUBLISH_HOMEBREW=true` | Create `arturoaviles/homebrew-tap` with a default branch; add `HOMEBREW_TAP_TOKEN` scoped to Contents write on that tap only. Override `HOMEBREW_TAP_REPOSITORY` if needed and update the documented install name accordingly. |
+| Homebrew | `PUBLISH_HOMEBREW=true` | Use the existing `arturoaviles/homebrew-tap` repository and its `main` branch; add `HOMEBREW_TAP_TOKEN` scoped to Contents write on that tap only. Override `HOMEBREW_TAP_REPOSITORY` if needed and update the documented tap name accordingly. |
 | PyPI | `PUBLISH_PYPI=true` | Register `bionic-reader` and a trusted publisher for owner `arturoaviles`, repository `bionic-reader`, workflow `publish-packages.yml`, environment `pypi`. No PyPI password/token is needed. |
 | npm | `PUBLISH_NPM=true` | Own the `@arturoaviles` namespace and all seven package names; configure trusted publishers for `publish-packages.yml`, environment `npm`. Initial bootstrap may use a scoped `NPM_TOKEN` secret until OIDC is configured for each package. |
 | GitHub Packages | `PUBLISH_GITHUB_PACKAGES=true` | Enable package creation by this repository's GITHUB_TOKEN and configure the `github-packages` environment. The job alone has Packages write. Set package visibility/public access as appropriate; installation requires GitHub registry authentication. |

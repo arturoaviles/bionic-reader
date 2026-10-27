@@ -51,6 +51,8 @@ touch \
   --artifacts "$temporary" \
   --output "$temporary/bionic-reader.rb"
 ruby -c "$temporary/bionic-reader.rb"
+ruby -c Formula/bionic-reader.rb
+ruby -c scripts/check-homebrew-formula.rb
 ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path) }' \
   packaging/linux/nfpm.yaml packaging/snap/snapcraft.yaml.in .github/workflows/*.yml
 

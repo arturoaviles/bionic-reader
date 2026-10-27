@@ -4,11 +4,22 @@ set -Eeuo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-artifact_dir=${1:-"$repo_root/dist/local"}
-artifact_dir=$(cd "$artifact_dir" 2>/dev/null && pwd -P) || {
-  printf 'Homebrew install check requires an existing artifact directory: %s\n' "${1:-$repo_root/dist/local}" >&2
-  exit 66
-}
+mode=archive
+if [[ ${1:-} == --source ]]; then
+  mode=source
+  shift
+fi
+if [[ $# -gt 1 || ( $mode == source && $# -ne 0 ) ]]; then
+  printf 'Usage: %s [artifact-directory | --source]\n' "$0" >&2
+  exit 64
+fi
+if [[ $mode == archive ]]; then
+  artifact_dir=${1:-"$repo_root/dist/local"}
+  artifact_dir=$(cd "$artifact_dir" 2>/dev/null && pwd -P) || {
+    printf 'Homebrew install check requires an existing artifact directory: %s\n' "${1:-$repo_root/dist/local}" >&2
+    exit 66
+  }
+fi
 
 brew_bin=${BREW_BIN:-$(command -v brew || true)}
 [[ -n $brew_bin && -x $brew_bin ]] || {
@@ -41,14 +52,21 @@ if len(matches) != 1:
     raise SystemExit("expected exactly one bionic-reader Cargo package")
 print(matches[0]["version"])
 ')
-archive="$artifact_dir/bionic-reader-v$version-$target.tar.gz"
-[[ -f $archive ]] || {
-  printf 'Host-native archive is missing: %s\n' "$archive" >&2
-  printf 'Build it first with scripts/build-local-archive.sh [output-directory].\n' >&2
-  exit 66
-}
+if [[ $mode == archive ]]; then
+  archive="$artifact_dir/bionic-reader-v$version-$target.tar.gz"
+  [[ -f $archive ]] || {
+    printf 'Host-native archive is missing: %s\n' "$archive" >&2
+    printf 'Build it first with scripts/build-local-archive.sh [output-directory].\n' >&2
+    exit 66
+  }
+fi
 
 formula_name=bionic-reader-homebrew-ci
+install_flags=(--build-from-source)
+if [[ $mode == source ]]; then
+  formula_name=bionic-reader
+  install_flags=(--HEAD)
+fi
 tap_repo="bionic-reader-homebrew-ci-$$"
 tap_spec="arturoaviles/$tap_repo"
 if "$brew_bin" list --formula "$formula_name" >/dev/null 2>&1; then
@@ -99,12 +117,16 @@ trap cleanup EXIT
 
 tap_repo_dir="$temporary/homebrew-tap"
 mkdir -p "$tap_repo_dir/Formula"
-python3 scripts/render-homebrew-formula.py \
-  --version "$version" \
-  --artifacts "$artifact_dir" \
-  --local-target "$target" \
-  --formula-name "$formula_name" \
-  --output "$tap_repo_dir/Formula/$formula_name.rb"
+if [[ $mode == source ]]; then
+  cp Formula/bionic-reader.rb "$tap_repo_dir/Formula/$formula_name.rb"
+else
+  python3 scripts/render-homebrew-formula.py \
+    --version "$version" \
+    --artifacts "$artifact_dir" \
+    --local-target "$target" \
+    --formula-name "$formula_name" \
+    --output "$tap_repo_dir/Formula/$formula_name.rb"
+fi
 git -C "$tap_repo_dir" init -q
 git -C "$tap_repo_dir" add Formula
 git -C "$tap_repo_dir" -c user.name='Bionic Reader CI' -c user.email='ci@localhost' \
@@ -114,9 +136,22 @@ export HOMEBREW_NO_AUTO_UPDATE=1
 tap_attempted=1
 "$brew_bin" tap "$tap_spec" "$tap_repo_dir"
 install_attempted=1
-"$brew_bin" install --build-from-source "$tap_spec/$formula_name"
+"$brew_bin" install "${install_flags[@]}" "$tap_spec/$formula_name"
 HOMEBREW_DEVELOPER=1 "$brew_bin" test "$tap_spec/$formula_name"
 installed_prefix=$("$brew_bin" --prefix "$tap_spec/$formula_name")
+for asset in \
+  etc/bash_completion.d/bionic-reader \
+  share/zsh/site-functions/_bionic-reader \
+  share/fish/vendor_completions.d/bionic-reader.fish \
+  "share/$formula_name/config.example.toml" \
+  "share/$formula_name/integrations/bash.sh" \
+  "share/$formula_name/integrations/zsh.sh" \
+  "share/$formula_name/integrations/fish.fish"; do
+  [[ -f $installed_prefix/$asset ]] || {
+    printf 'Homebrew installation is missing an asset: %s\n' "$asset" >&2
+    exit 1
+  }
+done
 python3 scripts/check-installed-cli.py "$installed_prefix/bin/bionic-reader"
 "$brew_bin" uninstall --formula "$formula_name"
 install_attempted=0
@@ -127,4 +162,4 @@ if "$brew_bin" list --formula "$formula_name" >/dev/null 2>&1; then
 fi
 "$brew_bin" untap "$tap_spec"
 tap_attempted=0
-printf 'Homebrew local archive install, use, test, and uninstall passed for %s.\n' "$target"
+printf 'Homebrew %s install, use, test, and uninstall passed for %s.\n' "$mode" "$target"

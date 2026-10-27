@@ -299,6 +299,10 @@ jobs:
         run: |
           scripts/build-local-archive.sh
           scripts/check-homebrew-install.sh
+      - name: Check source formula fetch compatibility
+        run: HOMEBREW_DEVELOPER=1 brew ruby scripts/check-homebrew-formula.rb
+      - name: Install the repository source formula from main
+        run: scripts/check-homebrew-install.sh --source
 
   snap-local:
     name: Local Snap build, install, and use
