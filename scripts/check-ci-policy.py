@@ -15,7 +15,7 @@ def check_gate_config(workflow: str) -> None:
         raise ValueError("CI gate must declare an explicit dependency list")
     dependencies = set(dependency_match[1].replace(" ", "").split(","))
     # Attestations intentionally never run for PRs and have a separate trust boundary.
-    if dependencies != names - {"ci-gate", "attest-candidates"}:
+    if dependencies != names - {"ci-gate", "attest-candidates", "attest-go"}:
         raise ValueError("CI gate must aggregate every PR job")
     if "    if: always()\n" not in gate:
         raise ValueError("CI gate must run after failures and cancellations")

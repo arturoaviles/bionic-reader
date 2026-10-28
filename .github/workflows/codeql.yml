@@ -26,15 +26,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [rust, python, javascript-typescript]
+        language: [rust, python, javascript-typescript, go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.language == 'go'
+        with:
+          go-version: '1.27.3'
+          cache: false
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
+      - name: Build Go packages for analysis
+        if: matrix.language == 'go'
+        env:
+          CGO_ENABLED: '0'
+        run: go build ./...
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           category: /language:${{ matrix.language }}

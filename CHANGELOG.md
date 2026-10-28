@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-10-27
+
+### Added
+
+- Go module with an embedded Rust/WebAssembly engine, requiring Go 1.25+ and
+  no CGO, Rust installation, separate CLI, or runtime downloads.
+- Context-aware rendering, text segments, explicit TOML preferences, typed
+  errors, concurrent calls, and explicit reader resource cleanup.
+- Go examples, cross-platform conformance and race checks, engine reproduction
+  and provenance, vulnerability scanning, and public Go module proxy publication.
+
 ## 0.2.0 — 2026-10-27
 
 ### Added

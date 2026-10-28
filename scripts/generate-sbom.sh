@@ -13,6 +13,8 @@ cleanup() {
     bionic-reader_bin_wasm32-unknown-unknown.cdx.json \
     bindings/python/_native_cdylib_wasm32-unknown-unknown.cdx.json \
     bindings/wasm/bionic_reader_wasm_cdylib_wasm32-unknown-unknown.cdx.json
+  rm -f "bindings/go/bionic-reader-go_bin_${target}.cdx.json" \
+    bindings/go/bionic-reader-go_bin_wasm32-unknown-unknown.cdx.json
 }
 trap cleanup EXIT
 # Generate runtime graphs with the features/target used for each embedded engine.

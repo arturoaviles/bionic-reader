@@ -19,6 +19,82 @@ env:
   PROPTEST_CASES: '4096'
 
 jobs:
+  go-engine:
+    name: Reproduce embedded Go engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rebuild and compare the versioned engine bytes
+        run: bash scripts/build-go-engine.sh --check
+      - name: Stage the verified Go engine candidate
+        run: |
+          mkdir -p dist/go-engine
+          cp internal/engine/engine.wasm engine_version.go dist/go-engine/
+          python3 scripts/candidate-checksums.py dist/go-engine
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bionic-reader-go-engine
+          path: dist/go-engine/
+          if-no-files-found: error
+          retention-days: 14
+
+  library-go:
+    name: Go API (${{ matrix.runner }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            go: '1.25.0'
+          - runner: ubuntu-24.04
+            go: '1.27.3'
+            race: true
+          - runner: ubuntu-24.04-arm
+            go: '1.27.3'
+          - runner: macos-15
+            go: '1.27.3'
+          - runner: macos-15-intel
+            go: '1.27.3'
+          - runner: windows-2025
+            go: '1.27.3'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - name: Test the installed module without CGO
+        env:
+          CGO_ENABLED: '0'
+          GOTOOLCHAIN: local
+        run: |
+          go mod verify
+          go test ./...
+          go vet ./...
+          go run ./examples/go
+      - name: Check formatting and dependency metadata
+        if: runner.os == 'Linux' && matrix.race == true
+        shell: bash
+        run: |
+          test -z "$(gofmt -l reader.go reader_test.go example_test.go engine_version.go examples/go/main.go)"
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Check concurrent calls with the race detector
+        if: matrix.race == true
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+      - name: Audit reachable Go dependency vulnerabilities
+        if: matrix.race == true
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   portable-core:
     name: Portable document engine
     runs-on: ubuntu-24.04
@@ -1046,10 +1122,33 @@ jobs:
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"               --source-digest "$GITHUB_SHA" --deny-self-hosted-runners               --predicate-type https://cyclonedx.org/bom
           done
 
+  attest-go:
+    name: Attest embedded Go engine
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: go-engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bionic-reader-go-engine
+          path: go-engine
+      - name: Verify candidate digests without executing code
+        working-directory: go-engine
+        run: sha256sum --check --strict SHA256SUMS
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: go-engine/*
+
   ci-gate:
     name: CI gate
     if: always()
-    needs: [library-node, library-react, library-examples, library-safari, library-python, portable-core, rust, coverage, rust-maintenance, miri, fuzz, homebrew-local, snap-local, node-local-macos, framework-loader-tests, distribution-static, target-builds, linux-package-install-smoke, macos-shell-tests, workflow-lint, source-install, glibc-runtime]
+    needs: [go-engine, library-go, library-node, library-react, library-examples, library-safari, library-python, portable-core, rust, coverage, rust-maintenance, miri, fuzz, homebrew-local, snap-local, node-local-macos, framework-loader-tests, distribution-static, target-builds, linux-package-install-smoke, macos-shell-tests, workflow-lint, source-install, glibc-runtime]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -1059,4 +1158,4 @@ jobs:
       - name: Require every PR matrix job to succeed
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/check-ci-gate.py library-node library-react library-examples library-safari library-python portable-core rust coverage rust-maintenance miri fuzz homebrew-local snap-local node-local-macos framework-loader-tests distribution-static target-builds linux-package-install-smoke macos-shell-tests workflow-lint source-install glibc-runtime
+        run: python3 scripts/check-ci-gate.py go-engine library-go library-node library-react library-examples library-safari library-python portable-core rust coverage rust-maintenance miri fuzz homebrew-local snap-local node-local-macos framework-loader-tests distribution-static target-builds linux-package-install-smoke macos-shell-tests workflow-lint source-install glibc-runtime

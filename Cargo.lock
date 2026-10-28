@@ -66,7 +66,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bionic-reader"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -87,8 +87,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bionic-reader-go"
+version = "0.3.0"
+dependencies = [
+ "bionic-reader",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bionic-reader-python"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bionic-reader",
  "pyo3",
@@ -97,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "bionic-reader-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bionic-reader",
  "serde_json",

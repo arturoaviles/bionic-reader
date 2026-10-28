@@ -102,6 +102,7 @@ Do not enable a channel before creating/owning its destination.
 | npm | `PUBLISH_NPM=true` | Own the `@arturoaviles` namespace and all seven package names; configure trusted publishers for `publish-packages.yml`, environment `npm`. Initial bootstrap may use a scoped `NPM_TOKEN` secret until OIDC is configured for each package. |
 | GitHub Packages | `PUBLISH_GITHUB_PACKAGES=true` | Enable package creation by this repository's GITHUB_TOKEN and configure the `github-packages` environment. The job alone has Packages write. Set package visibility/public access as appropriate; installation requires GitHub registry authentication. |
 | crates.io | `PUBLISH_CRATES_IO=true` | Own `bionic-reader` and configure its GitHub trusted publisher for repository `arturoaviles/bionic-reader`, owner ID `2120957`, workflow `publish-packages.yml`, environment `crates-io`. No permanent Cargo token or local `cargo login` is needed. |
+| Go module proxy | `PUBLISH_GO=true` | The tagged repository root must contain `go.mod`, `go.sum`, the Go API, and its generated embedded engine. No account, token, extra repository, or upload is needed. The job requests the immutable root release tag through proxy.golang.org with sum.golang.org enabled. |
 
 See the official [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
 and [npm trusted publisher](https://docs.npmjs.com/trusted-publishers/) setup guides.
@@ -142,6 +143,22 @@ has a 14-day retention period. If it expires, rerun the original main-push CI
 run before retrying publication. The registry package has the same Cargo-owned
 version as Python and npm; test a fresh registry consumer after publication.
 
+Go support starts with 0.3.0. Before tagging a Go-capable release, update the
+Cargo-owned version and regenerate the embedded engine as described in
+[BUILD.md](BUILD.md#regenerate-the-embedded-go-engine). Commit the resulting
+`engine_version.go` and `internal/engine/engine.wasm`. The Go CI jobs verify
+reproduction from Rust source and exercise installed APIs without CGO across
+Linux, macOS, and Windows. Main CI attests the engine separately, and release
+preparation checks those bytes against the tagged source before including
+`bionic-reader-vVERSION-go-engine.wasm` in the release manifest.
+
+The optional `go` publication job downloads the tagged module through the public
+proxy, checks its origin commit/tag, both module checksums and the attested engine
+digest, then runs an independent consumer and shared fixtures. Existing matching
+tags are safe to request again; published tags must never move. pkg.go.dev
+documentation discovery is asynchronous and does not require a publishing token.
+The Go channel needs no GitHub environment or additional write permissions.
+
 To retry an individual enabled channel without republishing the others:
 
 ```sh
@@ -149,7 +166,8 @@ gh workflow run publish-packages.yml --ref main -f tag=v0.1.0 -f channel=homebre
 ```
 
 To publish or retry only the Rust crate, use `-f channel=crates-io` instead.
-The channel choices are all/homebrew/pypi/npm/github-packages/crates-io. Manual publication
+Use `-f channel=go` to request and verify only the Go module.
+The channel choices are all/homebrew/pypi/npm/github-packages/crates-io/go. Manual publication
 requires an already public normal release; drafts, prereleases and moved or
 mismatched tags are rejected. After setup, test actual `brew install`, pip/uv
 installation and npm/Yarn/pnpm native dependency selection before removing the

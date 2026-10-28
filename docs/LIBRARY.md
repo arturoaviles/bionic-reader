@@ -1,6 +1,6 @@
 # Use Bionic Reader in applications
 
-The Rust, Python, and JavaScript APIs share the CLI's Rust transformation engine,
+The Rust, Python, JavaScript, and Go APIs share the CLI's Rust transformation engine,
 including multilingual word boundaries, profiles, Markdown handling, and safe
 terminal controls. React renders its text segments. Processing runs locally;
 applications do not launch the CLI or call a service.
@@ -126,6 +126,26 @@ not use Suspense to initialize the engine. Applications own their loading and
 error UI. See the [generic SSR example](../examples/react) and the
 [Next.js example](../examples/next). The Next.js example validates Pages Router
 with Webpack; other router/bundler combinations need their own integration check.
+
+## Go
+
+Go 1.25+ applications install through Go's normal module proxy:
+
+```sh
+go get github.com/arturoaviles/bionic-reader
+```
+
+The module embeds the Rust engine as WebAssembly and uses wazero without CGO,
+Rust, an external CLI, or runtime downloads. `NewReader(ctx)` loads the engine;
+reuse it and `defer reader.Close()`. `Render(ctx, text, format, options)`,
+`Segments(ctx, text, options)`, and `ParseConfig(ctx, contents)` expose the shared
+contract. Calls are safe concurrently through isolated instances; cancellation
+affects only that operation. Optional numbers and Booleans use pointers, with
+`Pointer(value)` as a convenience helper. `Version` identifies the engine.
+
+See the [Go examples](examples/GO.md) and
+[package reference](https://pkg.go.dev/github.com/arturoaviles/bionic-reader).
+Go support starts with 0.3.0. Module tags follow the Cargo-owned release version.
 
 ## Options and document contracts
 

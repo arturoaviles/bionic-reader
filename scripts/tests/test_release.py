@@ -137,9 +137,17 @@ class ReleaseTests(unittest.TestCase):
                 release["stage_bundle"](source, output, "0.1.0", target)
 
     def test_entire_release_stages_all_targets_and_aborts_on_bad_provenance(self):
-        for fail_provenance in (False, True):
+        for fail_provenance, go_case in (
+            (False, None),
+            (True, None),
+            (False, "valid"),
+            (False, "source"),
+            (False, "digest"),
+            (False, "attestation"),
+            (False, "version"),
+        ):
             with self.subTest(
-                fail_provenance=fail_provenance
+                fail_provenance=fail_provenance, go_case=go_case
             ), tempfile.TemporaryDirectory() as d:
                 root = Path(d)
                 fixtures = root / "fixtures"
@@ -157,6 +165,22 @@ class ReleaseTests(unittest.TestCase):
                                 source / f"bionic-reader-0.1.0-1.{label}.{suffix}"
                             ).write_bytes(b"package")
                         checksums(source, False)
+                go_wasm = b"\0asm\x01\0\0\0Go engine fixture"
+                go_version = "0.2.0" if go_case == "version" else "0.1.0"
+                go_identity = (
+                    f'const Version = "{go_version}"\n'
+                    f'const engineSHA256 = "{hashlib.sha256(go_wasm).hexdigest()}"\n'
+                ).encode()
+                if go_case:
+                    go_bundle = fixtures / "go-engine"
+                    go_bundle.mkdir()
+                    (go_bundle / "engine.wasm").write_bytes(
+                        go_wasm + b"modified" if go_case == "source" else go_wasm
+                    )
+                    (go_bundle / "engine_version.go").write_bytes(go_identity)
+                    checksums(go_bundle, False)
+                    if go_case == "digest":
+                        (go_bundle / "engine.wasm").write_bytes(go_wasm + b"modified")
                 output = root / "release"
                 github_output = root / "github-output"
                 run = {
@@ -171,6 +195,8 @@ class ReleaseTests(unittest.TestCase):
                 }
 
                 def command(*args):
+                    if args[:2] == ("git", "ls-tree"):
+                        return "go.mod" if go_case else ""
                     if args[:2] == ("git", "rev-parse"):
                         return "abc"
                     if args[:2] == ("git", "show"):
@@ -194,8 +220,15 @@ class ReleaseTests(unittest.TestCase):
                             fixtures / target, Path(args[args.index("--dir") + 1])
                         )
                     elif args[:3] == ["gh", "attestation", "verify"]:
-                        if fail_provenance:
+                        if fail_provenance or (
+                            go_case == "attestation" and "/go-engine/" in args[3]
+                        ):
                             raise subprocess.CalledProcessError(1, args)
+                    elif args[:2] == ["git", "show"]:
+                        data = (
+                            go_wasm if args[2].endswith("engine.wasm") else go_identity
+                        )
+                        return subprocess.CompletedProcess(args, 0, stdout=data)
                     elif args[:3] != ["git", "merge-base", "--is-ancestor"]:
                         self.fail(f"Unexpected subprocess: {args}")
                     return subprocess.CompletedProcess(args, 0)
@@ -211,15 +244,31 @@ class ReleaseTests(unittest.TestCase):
                     "sys.argv",
                     ["prepare-release.py", "v0.1.0", "--output", str(output)],
                 ), mock.patch("subprocess.run", side_effect=invoke) as calls:
-                    if fail_provenance:
-                        with self.assertRaises(subprocess.CalledProcessError):
+                    if fail_provenance or go_case in (
+                        "source",
+                        "digest",
+                        "attestation",
+                        "version",
+                    ):
+                        with self.assertRaises(
+                            (subprocess.CalledProcessError, ValueError)
+                        ):
                             release["main"]()
                         self.assertFalse(github_output.exists())
                         self.assertFalse((output / "SHA256SUMS").exists())
                     else:
                         release["main"]()
                         checksums(output, True)
-                        self.assertEqual(len(list(output.iterdir())), 47)
+                        self.assertEqual(
+                            len(list(output.iterdir())), 48 if go_case else 47
+                        )
+                        if go_case:
+                            self.assertEqual(
+                                (
+                                    output / "bionic-reader-v0.1.0-go-engine.wasm"
+                                ).read_bytes(),
+                                go_wasm,
+                            )
                         self.assertEqual(
                             github_output.read_text(), "tag=v0.1.0\nsha=abc\n"
                         )
@@ -228,7 +277,7 @@ class ReleaseTests(unittest.TestCase):
                             for call in calls.call_args_list
                             if call.args[0][:3] == ["gh", "attestation", "verify"]
                         ]
-                        self.assertEqual(len(provenance_calls), 36)
+                        self.assertEqual(len(provenance_calls), 38 if go_case else 36)
 
     def test_tampered_incomplete_or_unexpected_bundles_fail(self):
         for failure in ("tampered", "missing", "extra", "gnu-packages", "report"):
