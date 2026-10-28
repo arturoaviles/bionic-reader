@@ -43,6 +43,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tag")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--crates-io", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.tag):
         parser.error("Expected vMAJOR.MINOR.PATCH")
@@ -155,7 +156,14 @@ def main() -> None:
             check=True,
         )
         shutil.copyfile(ROOT / "scripts/publish-npm.py", npm / "publish-npm.py")
-        for channel in (npm, pypi, homebrew):
+        channels = [npm, pypi, homebrew]
+        if args.crates_io:
+            cargo = args.output / "crates-io"
+            runpy.run_path(str(ROOT / "scripts/publish-crates-io.py"))["stage_cargo"](
+                source, version, repo, cargo
+            )
+            channels.append(cargo)
+        for channel in channels:
             checksums(channel, False)
     print(f"Verified publication inputs for {args.tag} at {sha}")
 
