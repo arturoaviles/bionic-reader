@@ -6,18 +6,18 @@ These instructions are for contributors and users who want to compile Bionic Rea
 
 Go consumers install the module from the registry without these tools. Contributors
 changing Rust engine code or the Cargo version regenerate the committed payload
-with Rust 1.85.1, Python 3.11+, and the WASI target:
+with Docker and Python 3.11+. The builder uses a digest-pinned Linux/amd64 Rust
+1.85.1 image and installs its WASI target internally:
 
 ```sh
-rustup target add wasm32-wasip1 --toolchain 1.85.1
 bash scripts/build-go-engine.sh
 bash scripts/build-go-engine.sh --check
 go test ./...
 go test -race ./...
 ```
 
-The script builds the private `bindings/go` adapter from locked dependencies,
-normalizes source paths, and updates `internal/engine/engine.wasm` and
+The script builds the private `bindings/go` adapter from locked dependencies
+inside the canonical container, fixes source/cache paths and flags, and updates `internal/engine/engine.wasm` and
 `engine_version.go`. Commit both generated files with the source change. CI
 rebuilds on Linux and requires exact byte equality, then tests Go consumers on
 Linux, macOS, and Windows with CGO disabled. Race checks use CGO only for Go's

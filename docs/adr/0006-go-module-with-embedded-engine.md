@@ -28,8 +28,10 @@ context cancellation and deadline errors retain Go's standard identities.
 
 Commit the generated engine and its version/checksum declaration so `go get`
 provides a complete module without Rust or a build hook. Rebuild from locked
-Rust 1.85.1 source with canonical source-path mappings in CI and require exact
-byte equality. A separate main-only job attests the engine without executing it.
+Rust 1.85.1 source in a digest-pinned Linux/amd64 container with canonical paths
+and flags in CI and require exact byte equality. This fixes Cargo crate identities
+and linker ordering as well as source paths across contributor hosts. A separate
+main-only job attests the engine without executing it.
 Release preparation checks that attested candidate against the tagged source.
 The engine is also included in the GitHub Release checksum manifest.
 

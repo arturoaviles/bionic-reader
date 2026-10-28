@@ -9,11 +9,20 @@ mode=${1:---write}
 }
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
-cargo_home=${CARGO_HOME:-"$HOME/.cargo"}
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/target}/go-engine"
-export RUSTFLAGS="--remap-path-prefix=$repo_root=/src/bionic-reader --remap-path-prefix=$cargo_home=/cargo"
-cargo +1.85.1 build --locked --release --target wasm32-wasip1 --package bionic-reader-go
-cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bionic-reader-go.wasm" "$temporary/engine.wasm"
+build_root="${CARGO_TARGET_DIR:-$repo_root/target}/go-engine"
+mkdir -p "$build_root"
+build_root=$(cd "$build_root" && pwd)
+# Canonical host, source/cache paths and flags keep Cargo's crate identities and
+# linker ordering independent of the contributor's OS and checkout location.
+docker run --rm --platform linux/amd64 \
+  --mount "type=bind,src=$repo_root,dst=/source,readonly" \
+  --mount "type=bind,src=$build_root,dst=/build" \
+  --env CARGO_HOME=/build/cargo --env CARGO_TARGET_DIR=/build/target \
+  --env 'RUSTFLAGS=--remap-path-prefix=/source=/src/bionic-reader --remap-path-prefix=/build/cargo=/cargo' \
+  --workdir /source \
+  rust:1.85.1-slim-bookworm@sha256:3490aa77d179a59d67e94239cca96dd84030b564470859200f535b942bdffedf \
+  bash -eu -c 'rustup target add wasm32-wasip1 --toolchain 1.85.1; cargo +1.85.1 build --locked --release --target wasm32-wasip1 --package bionic-reader-go'
+cp "$build_root/target/wasm32-wasip1/release/bionic-reader-go.wasm" "$temporary/engine.wasm"
 python3 - "$temporary" <<'PY'
 import hashlib
 import sys

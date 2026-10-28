@@ -4,4 +4,4 @@ package bionicreader
 // Version is the Cargo-owned package and embedded-engine version.
 const Version = "0.3.0"
 
-const engineSHA256 = "5c90c6297266e285996565c1557918c9b662c4fb1542874eef6bce7e5af30c18"
+const engineSHA256 = "875f71ea626be2fa5d0be61859ed3507ac545bad704c3d2c6d9c76e3ec9a3ad0"
