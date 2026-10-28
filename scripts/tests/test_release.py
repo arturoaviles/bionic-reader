@@ -171,6 +171,8 @@ class ReleaseTests(unittest.TestCase):
                 }
 
                 def command(*args):
+                    if args[:2] == ("git", "ls-tree"):
+                        return ""
                     if args[:2] == ("git", "rev-parse"):
                         return "abc"
                     if args[:2] == ("git", "show"):

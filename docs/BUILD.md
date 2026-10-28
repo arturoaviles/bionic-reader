@@ -2,6 +2,27 @@
 
 These instructions are for contributors and users who want to compile Bionic Reader or create local packages. For Homebrew, apt, dnf, pacman, pip, uv, npm, Yarn, pnpm, Cargo installation entry points, see the [README](../README.md#installation). Native package managers select supported architectures automatically. Rust and build tools are required only for source builds.
 
+## Regenerate the embedded Go engine
+
+Go consumers install the module from the registry without these tools. Contributors
+changing Rust engine code or the Cargo version regenerate the committed payload
+with Rust 1.85.1, Python 3.11+, and the WASI target:
+
+```sh
+rustup target add wasm32-wasip1 --toolchain 1.85.1
+bash scripts/build-go-engine.sh
+bash scripts/build-go-engine.sh --check
+go test ./...
+go test -race ./...
+```
+
+The script builds the private `bindings/go` adapter from locked dependencies,
+normalizes source paths, and updates `internal/engine/engine.wasm` and
+`engine_version.go`. Commit both generated files with the source change. CI
+rebuilds on Linux and requires exact byte equality, then tests Go consumers on
+Linux, macOS, and Windows with CGO disabled. Race checks use CGO only for Go's
+instrumentation. The module's compiler/runtime requirements are in `go.mod`.
+
 ## Build and install from source
 
 ### 1. Install the prerequisites

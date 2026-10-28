@@ -74,7 +74,8 @@ You can also download native binaries from [GitHub Releases](https://github.com/
 
 Install packages from [PyPI](https://pypi.org/project/bionic-reader/),
 [npm](https://www.npmjs.com/package/@arturoaviles/bionic-reader), or
-[crates.io](https://crates.io/crates/bionic-reader). The library APIs below share
+[crates.io](https://crates.io/crates/bionic-reader), or the
+[Go module proxy](https://pkg.go.dev/github.com/arturoaviles/bionic-reader). The library APIs below share
 the CLI's local transformation engine. See the [library guide](docs/LIBRARY.md)
 for complete options, errors, and platform requirements.
 
@@ -89,6 +90,9 @@ environment:
 ```sh
 python -m pip install bionic-reader
 ```
+
+See the [Python examples](docs/examples/PYTHON.md) for formats, profiles,
+Markdown, custom rendering, configuration, and file conversion.
 
 ```python
 from bionic_reader import Reader
@@ -105,6 +109,9 @@ The library API requires Node 22+. Install into your application:
 ```sh
 npm install @arturoaviles/bionic-reader
 ```
+
+See the [JavaScript examples](docs/examples/JS.md) for Node.js, browser,
+TypeScript, and React usage.
 
 Initialize the bundled WebAssembly engine once:
 
@@ -130,6 +137,9 @@ Requires Rust 1.85.1+. Add the crate to your application:
 cargo add bionic-reader
 ```
 
+See the [Rust examples](docs/examples/RUST.md) for document transformation,
+text segments, configuration, streaming, and custom segmentation.
+
 ```rust
 use bionic_reader::reading::{Options, Reader};
 use bionic_reader::settings::OutputFormat;
@@ -147,6 +157,42 @@ Formatted output requires an explicit `ansi`, `plain`, `markdown`, or `html`
 format. Text segments contain literal `text` and an `emphasized` flag for custom
 presentation. Calls use explicit settings and deterministic defaults; they do
 not implicitly read CLI configuration or terminal state.
+
+### Go
+
+Requires Go 1.25+. Install into your application:
+
+```sh
+go get github.com/arturoaviles/bionic-reader
+```
+
+See the [Go examples](docs/examples/GO.md) for formats, profiles, Markdown,
+concurrent use, configuration, and file conversion.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    bionicreader "github.com/arturoaviles/bionic-reader"
+)
+
+func main() {
+    ctx := context.Background()
+    reader, err := bionicreader.NewReader(ctx)
+    if err != nil { panic(err) }
+    defer reader.Close()
+    html, err := reader.Render(ctx, "Hello world", bionicreader.HTML, bionicreader.Options{})
+    if err != nil { panic(err) }
+    fmt.Println(html)
+}
+```
+
+The Rust engine is embedded as WebAssembly and runs locally through wazero.
+Consumers need no CGO, Rust installation, separate CLI, or runtime downloads.
+Reuse and close the reader; calls are safe concurrently and accept contexts
+for cancellation. Go support starts with the 0.3.0 release.
 
 ## The reader
 

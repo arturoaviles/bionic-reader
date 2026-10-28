@@ -44,6 +44,7 @@ def main() -> None:
     parser.add_argument("tag")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--crates-io", action="store_true")
+    parser.add_argument("--go", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.tag):
         parser.error("Expected vMAJOR.MINOR.PATCH")
@@ -157,6 +158,49 @@ def main() -> None:
         )
         shutil.copyfile(ROOT / "scripts/publish-npm.py", npm / "publish-npm.py")
         channels = [npm, pypi, homebrew]
+        if args.go:
+            go = args.output / "go"
+            go.mkdir()
+            wasm = bundle / f"bionic-reader-v{version}-go-engine.wasm"
+            subprocess.run(
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(wasm),
+                    "--repo",
+                    repo,
+                    "--signer-workflow",
+                    f"{repo}/.github/workflows/ci.yml",
+                    "--source-digest",
+                    sha,
+                    "--deny-self-hosted-runners",
+                ],
+                check=True,
+            )
+            identity = subprocess.check_output(
+                ["git", "show", f"{sha}:engine_version.go"], text=True
+            )
+            checksum = runpy.run_path(str(ROOT / "scripts/publish-go.py"))[
+                "verify_engine"
+            ](
+                wasm.read_bytes(),
+                identity,
+                version,
+            )
+            (go / "source.json").write_text(
+                json.dumps(
+                    {
+                        "module": f"github.com/{repo}",
+                        "version": version,
+                        "commit": sha,
+                        "engine_sha256": checksum,
+                    }
+                )
+                + "\n"
+            )
+            shutil.copyfile(ROOT / "scripts/publish-go.py", go / "publish-go.py")
+            channels.append(go)
         if args.crates_io:
             cargo = args.output / "crates-io"
             runpy.run_path(str(ROOT / "scripts/publish-crates-io.py"))["stage_cargo"](

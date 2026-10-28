@@ -215,6 +215,64 @@ def main() -> None:
                     check=True,
                 )
             stage_bundle(bundle, args.output, version, target)
+        if command("git", "ls-tree", "--name-only", sha, "go.mod"):
+            go_bundle = Path(directory) / "go-engine"
+            subprocess.run(
+                [
+                    "gh",
+                    "run",
+                    "download",
+                    run_id,
+                    "--repo",
+                    repo,
+                    "--name",
+                    "bionic-reader-go-engine",
+                    "--dir",
+                    str(go_bundle),
+                ],
+                check=True,
+            )
+            checksums(go_bundle, True)
+            if {path.name for path in go_bundle.iterdir()} != {
+                "engine.wasm",
+                "engine_version.go",
+                "SHA256SUMS",
+            }:
+                raise ValueError("Incomplete Go engine candidate")
+            for name in ("engine.wasm", "engine_version.go"):
+                subprocess.run(
+                    [
+                        "gh",
+                        "attestation",
+                        "verify",
+                        str(go_bundle / name),
+                        "--repo",
+                        repo,
+                        "--signer-workflow",
+                        f"{repo}/.github/workflows/ci.yml",
+                        "--source-digest",
+                        sha,
+                        "--deny-self-hosted-runners",
+                    ],
+                    check=True,
+                )
+                source_path = (
+                    "internal/engine/engine.wasm" if name == "engine.wasm" else name
+                )
+                expected = subprocess.check_output(
+                    ["git", "show", f"{sha}:{source_path}"]
+                )
+                if (go_bundle / name).read_bytes() != expected:
+                    raise ValueError("Go candidate differs from the tagged source")
+            runpy.run_path(str(ROOT / "scripts/publish-go.py"))["verify_engine"](
+                (go_bundle / "engine.wasm").read_bytes(),
+                (go_bundle / "engine_version.go").read_text(),
+                version,
+            )
+            shutil.copyfile(
+                go_bundle / "engine.wasm",
+                args.output / f"bionic-reader-v{version}-go-engine.wasm",
+            )
     subprocess.run(
         [
             sys.executable,

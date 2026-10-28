@@ -19,7 +19,7 @@ platform validation and release notes can be completed before publication.
 The README retains native package-manager entry points and a brief getting-started
 path; detailed installation, usage, configuration and shell integration live in
 dedicated guides. A separate, opt-in post-release workflow publishes the verified
-payloads to Homebrew, PyPI, npm, GitHub Packages and crates.io. This supersedes the initial
+payloads to Homebrew, PyPI, npm, GitHub Packages, crates.io and the Go module proxy. This supersedes the initial
 Python-dispatcher/local-tap approach and the decision to defer every registry:
 package managers should own platform selection, upgrades and removal. Publication
 credentials and external namespaces must be configured before enabling a channel.
@@ -28,3 +28,10 @@ successful main CI crate candidate. Repackaging the release commit must reproduc
 that candidate before credentials are requested; registry checksums must match
 after publication and on retries. Snap retains its repository route; hosted
 signed Linux repositories and Snap Store approval remain separate gates.
+
+Go uses the same root release tags, containing a complete Go module and its
+generated embedded engine. CI reproduces and attests that engine separately;
+release preparation binds it to the tagged source. The Go publication channel
+requests proxy indexing with checksum-database verification and tests an
+independent consumer. It needs no registry token or write-capable job. ADR 0006
+defines the Go runtime and API boundary.
