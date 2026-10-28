@@ -19,9 +19,12 @@ platform validation and release notes can be completed before publication.
 The README retains native package-manager entry points and a brief getting-started
 path; detailed installation, usage, configuration and shell integration live in
 dedicated guides. A separate, opt-in post-release workflow publishes the verified
-payloads to Homebrew, PyPI, npm and GitHub Packages. This supersedes the initial
+payloads to Homebrew, PyPI, npm, GitHub Packages and crates.io. This supersedes the initial
 Python-dispatcher/local-tap approach and the decision to defer every registry:
 package managers should own platform selection, upgrades and removal. Publication
 credentials and external namespaces must be configured before enabling a channel.
-Cargo and Snap retain repository routes; hosted signed Linux repositories and
-Snap Store approval remain separate gates.
+Cargo publication uses GitHub OIDC in the `crates-io` environment and the original
+successful main CI crate candidate. Repackaging the release commit must reproduce
+that candidate before credentials are requested; registry checksums must match
+after publication and on retries. Snap retains its repository route; hosted
+signed Linux repositories and Snap Store approval remain separate gates.

@@ -57,7 +57,7 @@ reading speed.
    draft does not publish registries or notify them to upload packages.
 5. A human-published release triggers `publish-packages.yml`. It rechecks the
    public release/tag/source identity, all checksums and original CI provenance
-   before staging separate Homebrew, PyPI, npm and GitHub Packages inputs. Only
+   before staging separate Homebrew, PyPI, npm, GitHub Packages and crates.io inputs. Only
    explicitly enabled jobs publish. Job summaries distinguish disabled/skipped
    channels from successful publication.
 6. Replace the README's pending notice only after the release and listed
@@ -101,12 +101,15 @@ Do not enable a channel before creating/owning its destination.
 | PyPI | `PUBLISH_PYPI=true` | Register `bionic-reader` and a trusted publisher for owner `arturoaviles`, repository `bionic-reader`, workflow `publish-packages.yml`, environment `pypi`. No PyPI password/token is needed. |
 | npm | `PUBLISH_NPM=true` | Own the `@arturoaviles` namespace and all seven package names; configure trusted publishers for `publish-packages.yml`, environment `npm`. Initial bootstrap may use a scoped `NPM_TOKEN` secret until OIDC is configured for each package. |
 | GitHub Packages | `PUBLISH_GITHUB_PACKAGES=true` | Enable package creation by this repository's GITHUB_TOKEN and configure the `github-packages` environment. The job alone has Packages write. Set package visibility/public access as appropriate; installation requires GitHub registry authentication. |
+| crates.io | `PUBLISH_CRATES_IO=true` | Own `bionic-reader` and configure its GitHub trusted publisher for repository `arturoaviles/bionic-reader`, owner ID `2120957`, workflow `publish-packages.yml`, environment `crates-io`. No permanent Cargo token or local `cargo login` is needed. |
 
 See the official [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
 and [npm trusted publisher](https://docs.npmjs.com/trusted-publishers/) setup guides.
+Rust uses the official [crates.io authentication action](https://github.com/rust-lang/crates-io-auth-action)
+to exchange the job's GitHub OIDC identity for a temporary publishing token.
 
 Create the corresponding GitHub environments (`homebrew`, `pypi`, `npm`,
-`github-packages`) and restrict deployment to trusted refs. Environments are
+`github-packages`, `crates-io`) and restrict deployment to trusted refs. Environments are
 separate from default PR CI; no PR job receives publishing credentials.
 Publishing caches are disabled. PyPI uses a SHA-pinned PyPA action and OIDC;
 npm uses provenance; GitHub's npm registry uses its scoped GITHUB_TOKEN.
@@ -124,11 +127,20 @@ silently replaced. PyPI keeps existing-file rejection enabled; after a partial
 upload, verify uploaded digests and publish only the missing wheels using the
 approved publishing identity, rather than weakening its immutability checks.
 
-Crates.io publication is currently manual. From the exact tested release commit,
-use the existing authorized Cargo credential to run `cargo publish --locked
---package bionic-reader`. Confirm the uploaded crate checksum against the
-validated Cargo candidate and test a fresh registry consumer. The registry
-package has the same Cargo-owned version as the Python and npm artifacts.
+Crates.io publication downloads `bionic-reader-cargo-crate` from the original
+successful main-push CI run recorded in RELEASE-SOURCE.json. Staging verifies the
+GitHub artifact digest, package version and clean release commit. The publishing
+job checks out that commit, uses the same Rust 1.85.1 packaging toolchain, and
+compares the repackaged archive with the tested CI candidate before requesting
+credentials. No publishing cache is restored. The temporary token is scoped to
+the publication step and revoked by the action after the job.
+
+The job confirms the registry checksum after uploading. An existing version is
+skipped only when its checksum matches the exact candidate; different bytes
+fail rather than replacing a published version. The original Cargo CI artifact
+has a 14-day retention period. If it expires, rerun the original main-push CI
+run before retrying publication. The registry package has the same Cargo-owned
+version as Python and npm; test a fresh registry consumer after publication.
 
 To retry an individual enabled channel without republishing the others:
 
@@ -136,7 +148,8 @@ To retry an individual enabled channel without republishing the others:
 gh workflow run publish-packages.yml --ref main -f tag=v0.1.0 -f channel=homebrew
 ```
 
-The channel choices are all/homebrew/pypi/npm/github-packages. Manual publication
+To publish or retry only the Rust crate, use `-f channel=crates-io` instead.
+The channel choices are all/homebrew/pypi/npm/github-packages/crates-io. Manual publication
 requires an already public normal release; drafts, prereleases and moved or
 mismatched tags are rejected. After setup, test actual `brew install`, pip/uv
 installation and npm/Yarn/pnpm native dependency selection before removing the
@@ -183,8 +196,8 @@ new registry packaging metadata. See [CI integrity](ci/README.md#candidate-integ
   signed-repository builders/tests remain in CONTRIBUTING.md. They are not
   automatically deployed by the registry workflow.
 - Snap remains a local classic/devel candidate. Snap Store approval and an
-  approved publishing identity are external gates. Cargo uses Git/source until
-  crates.io publication is separately configured. Windows/container images are
+  approved publishing identity are external gates. Cargo publication requires
+  the crates.io trusted publisher and its enabled repository variable. Windows/container images are
   outside the current supported product matrix.
 - First publication requires fresh install/removal checks; later versions need
   upgrades too. CI success does not close the open 100% coverage target or every
