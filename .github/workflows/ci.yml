@@ -234,7 +234,7 @@ jobs:
           sudo apt-get install --yes fish zsh
           rustup toolchain install nightly-2026-10-22 --profile minimal --component llvm-tools-preview
           echo RUSTUP_TOOLCHAIN=nightly-2026-10-22 >> "$GITHUB_ENV"
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-llvm-cov@0.9.1
           checksum: true
@@ -310,7 +310,7 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-10-22 --profile minimal
           rustup toolchain install 1.85.1 --profile minimal --component rustfmt --component clippy
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-hack@0.6.45,cargo-udeps@0.1.61
           checksum: true
@@ -599,7 +599,7 @@ jobs:
       - name: Install the GNU binary build toolchain
         if: matrix.zig
         run: rustup toolchain install stable --profile minimal
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         if: matrix.zig
         with:
           tool: cargo-zigbuild@0.23.4
@@ -624,7 +624,7 @@ jobs:
         env:
           CANDIDATE_TARGET: ${{ matrix.target }}
         run: scripts/build-release.sh "$CANDIDATE_TARGET"
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-cyclonedx@0.5.9
           checksum: true
@@ -740,7 +740,7 @@ jobs:
           echo "$zig_dir" >> "$GITHUB_PATH"
           go install -ldflags="-X main.version=2.47.0" github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-zigbuild@0.23.4
           checksum: true
@@ -807,7 +807,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13.17'
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: typos@1.51.1,zizmor@1.31.1,cargo-deny@0.20.2
           checksum: true
